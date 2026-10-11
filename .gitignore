@@ -1,0 +1,26 @@
+# Compilation (Cargo.lock est conservé : c'est une application)
+/target
+**/*.rs.bk
+*.pdb
+
+# Éléments tiers non redistribuables : Titanium FRM Browser (exécutable, notice, entrées de registre) servant de référence
+/_reference/
+
+# Aperçus et sorties générés pendant le développement (FIB_DUMP, examples/genicon, conversions d'essai)
+/preview*/
+/out/
+/dist/
+
+# Éditeurs et systèmes
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Réglages locaux de Claude Code
+/.claude/settings.local.json
+/.claude/worktrees/

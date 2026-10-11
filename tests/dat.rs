@@ -1,8 +1,6 @@
 use fallout_image_browser::cli;
 use fallout_image_browser::dat::{self, Stat};
-use fallout_image_browser::formats::{self, DecodeCtx};
 use fallout_image_browser::model::*;
-use fallout_image_browser::palette;
 use std::path::{Path, PathBuf};
 
 fn tmp(name: &str) -> PathBuf {
@@ -12,51 +10,13 @@ fn tmp(name: &str) -> PathBuf {
     d
 }
 
-fn ctx() -> DecodeCtx {
-    DecodeCtx { palette: palette::fallout(), palette_name: "Fallout".into(), ext: String::new() }
+/// Fichiers d'exemple versionnés avec le projet (dossier `_test_files`).
+fn sample(rel: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("_test_files").join(rel)
 }
 
 fn sample_frm() -> Vec<u8> {
-    std::fs::read(r"D:\Torrent\Down\Fallout of Nevada\data\art\misc\EXP.FRM")
-        .or_else(|_| std::fs::read(r"D:\FalloutProjects\FalloutGecko\build\resources\art\misc\HEX.frm"))
-        .unwrap_or_else(|_| synthetic_frm())
-}
-
-#[test]
-fn real_fallout2_master_dat() {
-    let p = Path::new(r"D:\FalloutProjects\FalloutSFall\Fallout2\master.dat");
-    if !p.exists() {
-        return;
-    }
-    let d = dat::Dat::open(p).unwrap();
-    println!("{} entrées (DAT2 = {})", d.entries.len(), d.kind == dat::DatKind::Dat2);
-    let (dirs, files) = d.children("");
-    println!("racine : {dirs:?} + {} fichiers", files.len());
-    // Décode un échantillon de FRM et de PAL, compressés ou non.
-    let mut n_frm = 0;
-    let mut compressed = 0;
-    for (i, e) in d.entries.iter().enumerate() {
-        if e.path.to_lowercase().ends_with(".frm") && n_frm < 300 {
-            let bytes = d.read(i).unwrap_or_else(|er| panic!("{} : {er}", e.path));
-            assert_eq!(bytes.len(), e.size as usize, "{}", e.path);
-            formats::decode(Format::Frm, &bytes, &ctx()).unwrap_or_else(|er| panic!("{} : {er}", e.path));
-            n_frm += 1;
-            compressed += (e.flags != 0) as usize;
-        }
-    }
-    println!("{n_frm} FRM décodés dont {compressed} compressés");
-    assert!(n_frm > 0);
-    // Chemin virtuel complet.
-    let first = d.entries.iter().find(|e| e.path.to_lowercase().ends_with(".frm")).unwrap();
-    println!("PREMIER FRM : {}", first.path);
-    let mut vp = p.to_path_buf();
-    for c in first.path.split('/') {
-        vp.push(c);
-    }
-    assert_eq!(dat::stat(&vp), Some(Stat::File));
-    assert_eq!(dat::stat(p), Some(Stat::Dir));
-    assert!(dat::read_any(&vp).unwrap().len() > 0);
-    assert_eq!(dat::real_parent(&vp).unwrap(), p.parent().unwrap());
+    std::fs::read(sample("fallout/EXP.FRM")).expect("_test_files/fallout/EXP.FRM")
 }
 
 #[test]
@@ -202,10 +162,8 @@ fn cli_help_and_selection_options() {
     assert!(!cli::is_cli(&s(&[r"D:\some\folder"])));
     assert_eq!(cli::run(&s(&["convert", "x", "-h"])), 0);
     // Image courante / direction : critter à 6 directions et 12 images.
-    let src = r"D:\Torrent\Down\Fallout of Nevada\data\art\critters\HMJMPSAA.FRM";
-    if !Path::new(src).exists() {
-        return;
-    }
+    let src = sample("fallout/HMJMPSAA.FRM");
+    let src = src.to_str().unwrap();
     let dir = tmp("sel");
     let out = dir.join("o");
     let o = out.to_str().unwrap();
@@ -267,20 +225,3 @@ fn lying_entry_sizes_are_rejected() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// FRM fabriqué (dégradé en palette Fallout) : les tests ne dépendent pas de fichiers présents sur une machine particulière.
-fn synthetic_frm() -> Vec<u8> {
-    use fallout_image_browser::convert::*;
-    let (w, h) = (24usize, 16usize);
-    let mut v = vec![255u8; w * h * 4];
-    for y in 0..h {
-        for x in 0..w {
-            let o = (y * w + x) * 4;
-            v[o] = (x * 10) as u8;
-            v[o + 1] = (y * 15) as u8;
-            v[o + 2] = ((x + y) * 6) as u8;
-        }
-    }
-    let pic = Picture::single(Format::Bmp, w as u32, h as u32, Pixels::Rgba(v), None);
-    let o = ConvertOptions { format: Format::Frm, depth: DepthChoice::Indexed(PalChoice::Fallout), dither: false, bg: [0; 3], enc: Default::default() };
-    convert_to_bytes(&pic, &o, &Selection::default()).unwrap()
-}

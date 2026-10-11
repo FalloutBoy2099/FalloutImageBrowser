@@ -11,6 +11,9 @@
 /out/
 /dist/
 
+# Paquets générés par publish.ps1
+/publish/
+
 # Éditeurs et systèmes
 .vscode/
 .idea/

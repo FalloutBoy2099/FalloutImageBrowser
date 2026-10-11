@@ -122,25 +122,22 @@ fn synthetic_roundtrip_all_modes() {
     assert!(fails.is_empty(), "échecs :\n{}", fails.join("\n"));
 }
 
-fn load(path: &str) -> Option<(Picture, Vec<u8>)> {
-    let p = Path::new(path);
-    if !p.exists() {
-        println!("(absent : {path})");
-        return None;
-    }
-    let data = std::fs::read(p).unwrap();
-    let f = Format::from_path(p).unwrap();
-    Some((formats::decode(f, &data, &ctx()).unwrap_or_else(|e| panic!("{path}: {e}")), data))
+/// Fichiers d'exemple versionnés avec le projet (dossier `_test_files`).
+fn sample(rel: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("_test_files").join(rel)
+}
+
+/// Charge un fichier d'exemple (chemin relatif à `_test_files`).
+fn load(rel: &str) -> Option<(Picture, Vec<u8>)> {
+    let p = sample(rel);
+    let data = std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    let f = Format::from_path(&p).unwrap();
+    Some((formats::decode(f, &data, &ctx()).unwrap_or_else(|e| panic!("{rel}: {e}")), data))
 }
 
 #[test]
 fn real_samples_convert_everywhere() {
-    let samples = [
-        r"D:\FalloutProjects\FalloutGecko\build\resources\art\misc\HEX.frm",
-        r"D:\Torrent\Down\Fallout of Nevada\data\art\splash\SPLASH0.rix",
-        r"D:\Git\Arcanum\_work\MusicBoxMap.art",
-        r"D:\Git\Arcanum\_work\TarantSewer.art",
-    ];
+    let samples = ["fallout/HEX.frm", "fallout/SPLASH0.rix", "arcanum/MusicBoxMap.art", "arcanum/TarantSewer.art"];
     let mut fails = Vec::new();
     for s in samples {
         let Some((pic, _)) = load(s) else { continue };
@@ -165,13 +162,10 @@ fn real_samples_convert_everywhere() {
 
 #[test]
 fn frm_identity() {
-    let dir = Path::new(r"D:\Torrent\Down\Fallout of Nevada\data\art");
-    if !dir.exists() {
-        return;
-    }
+    let dir = sample("fallout");
     let mut n = 0;
     let mut bad = Vec::new();
-    for e in walk(dir) {
+    for e in walk(&dir) {
         if e.extension().map(|x| x.eq_ignore_ascii_case("frm")).unwrap_or(false) {
             let data = std::fs::read(&e).unwrap();
             let Ok(pic) = formats::decode(Format::Frm, &data, &ctx()) else { continue };
@@ -193,6 +187,7 @@ fn frm_identity() {
         }
     }
     println!("{n} FRM testés");
+    assert!(n >= 3, "FRM d'exemple introuvables dans _test_files/fallout");
     assert!(bad.is_empty(), "FRM non identiques : {bad:?}");
 }
 
@@ -215,12 +210,7 @@ fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
 #[test]
 fn dump_previews() {
     let Ok(out) = std::env::var("FIB_DUMP") else { return };
-    let samples = [
-        (r"D:\FalloutProjects\FalloutGecko\build\resources\art\misc\HEX.frm", "frm"),
-        (r"D:\Torrent\Down\Fallout of Nevada\data\art\splash\SPLASH0.rix", "rix"),
-        (r"D:\Git\Arcanum\_work\MusicBoxMap.art", "art1"),
-        (r"D:\Git\Arcanum\_work\TarantSewer.art", "art2"),
-    ];
+    let samples = [("fallout/HEX.frm", "frm"), ("fallout/SPLASH0.rix", "rix"), ("arcanum/MusicBoxMap.art", "art1"), ("arcanum/TarantSewer.art", "art2")];
     for (s, name) in samples {
         let Some((pic, _)) = load(s) else { continue };
         let o = opts(Format::Jpeg, DepthChoice::Rgb24);
@@ -251,8 +241,7 @@ fn make_big_image() {
 
 #[test]
 fn critter_animation_conversions() {
-    let path = r"D:\Torrent\Down\Fallout of Nevada\data\art\critters\HMJMPSAA.FRM";
-    let Some((pic, _)) = load(path) else { return };
+    let Some((pic, _)) = load("fallout/HMJMPSAA.FRM") else { return };
     assert_eq!((pic.directions, pic.frames_per_dir), (6, 12));
     // FRM -> GIF animé (direction 2)
     let o = opts(Format::Gif, DepthChoice::Indexed(PalChoice::Fallout));

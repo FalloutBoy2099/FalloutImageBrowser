@@ -1,5 +1,5 @@
 //! Icône de l'application : l'illustration `assets/icon_source.webp` (le Vault Boy devant son terminal), préparée par
-//! `examples/genicon.rs` en `assets/icon128.png` (icône de fenêtre, embarquée ici) et `assets/icon.ico` (exécutable Windows).
+//! `assets/genicon.rs` en `assets/icon128.png` (icône de fenêtre, embarquée ici) et `assets/icon.ico` (exécutable Windows).
 
 /// Icône de fenêtre : (pixels RGBA, largeur, hauteur).
 pub fn window_icon() -> (Vec<u8>, u32, u32) {

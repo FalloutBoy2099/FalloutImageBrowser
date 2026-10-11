@@ -152,26 +152,17 @@ fn seeds() -> Vec<(Format, String, Vec<u8>)> {
             }
         }
     }
+    // Fichiers réels versionnés avec le projet (`_test_files`) : un échantillon de chaque famille de formats.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("_test_files");
     let mut real: Vec<(Format, std::path::PathBuf)> = Vec::new();
-    let mut add = |dir: &str, exts: &[&str], max: usize| {
-        let mut files = Vec::new();
-        walk(std::path::Path::new(dir), exts, &mut files, max);
-        for p in files {
-            if std::fs::metadata(&p).map(|m| m.len() < 3_000_000).unwrap_or(false) {
-                if let Some(f) = Format::from_path(&p) {
-                    real.push((f, p));
-                }
+    let mut files = Vec::new();
+    walk(&root, &["frm", "rix", "art", "psd", "png", "zar", "spr", "til"], &mut files, usize::MAX);
+    assert!(!files.is_empty(), "_test_files introuvable");
+    for p in files {
+        if std::fs::metadata(&p).map(|m| m.len() < 3_000_000).unwrap_or(false) {
+            if let Some(f) = Format::from_path(&p) {
+                real.push((f, p));
             }
-        }
-    };
-    add(r"C:\_\awaken_1_4\awaken\gui\back", &["zar"], 3);
-    add(r"C:\_\awaken_1_4\awaken\sprites", &["spr"], 4);
-    add(r"C:\_\FOT-Redux-v13\core\tiles\Requiem\Red-TecTiles\Objects\TreesPlants\ForestWoods", &["til"], 3);
-    add(r"D:\FalloutX\Source\olym_2207\psd", &["psd"], 2);
-    for name in ["scr00000.pdn", "scr00000.dds", "map.ora", "Sample-hold_sampling_stage.xcf", "Water Lily Demo.kra"] {
-        let p = std::path::Path::new(r"C:\_").join(name);
-        if let (true, Some(f)) = (p.exists(), Format::from_path(&p)) {
-            real.push((f, p));
         }
     }
     for (f, p) in real {

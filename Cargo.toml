@@ -55,3 +55,8 @@ wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "m
 inherits = "release"
 opt-level = "z"
 panic = "abort"
+
+# Outil de développement : régénère les icônes à partir de assets/icon_source.webp (cargo run --release --example genicon)
+[[example]]
+name = "genicon"
+path = "assets/genicon.rs"

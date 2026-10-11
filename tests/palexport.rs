@@ -8,10 +8,13 @@ fn ctx() -> DecodeCtx {
     DecodeCtx { palette: palette::fallout(), palette_name: "Fallout".into(), ext: String::new() }
 }
 
+/// Fichiers d'exemple versionnés avec le projet (dossier `_test_files`).
+fn sample(rel: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("_test_files").join(rel)
+}
+
 fn indexed() -> Picture {
-    let data = std::fs::read(r"D:\Torrent\Down\Fallout of Nevada\data\art\critters\HMJMPSAA.FRM")
-        .or_else(|_| std::fs::read(r"D:\FalloutProjects\FalloutGecko\build\resources\art\misc\HEX.frm"))
-        .unwrap_or_else(|_| synthetic_frm());
+    let data = std::fs::read(sample("fallout/HMJMPSAA.FRM")).expect("_test_files/fallout/HMJMPSAA.FRM");
     formats::decode(Format::Frm, &data, &ctx()).unwrap()
 }
 
@@ -36,7 +39,6 @@ fn u32le(b: &[u8], o: usize) -> u32 {
 #[test]
 fn every_format_from_indexed_and_truecolor() {
     for pic in [indexed(), truecolor()] {
-        let idx = pic.palette.is_some();
         // Fallout PAL : 768 octets 6 bits, relisible.
         let b = encode(PalFormat::FalloutPal, &pic, "t").unwrap();
         assert_eq!(b.len(), 768);
@@ -100,10 +102,8 @@ fn cli_palette_subcommand() {
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     let dir = std::env::temp_dir().join(format!("fib_pal_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let src = r"D:\Torrent\Down\Fallout of Nevada\data\art\critters\HMJMPSAA.FRM";
-    if !std::path::Path::new(src).exists() {
-        return;
-    }
+    let src = sample("fallout/HMJMPSAA.FRM");
+    let src = src.to_str().unwrap();
     let d = dir.to_str().unwrap();
     for f in ["pal", "riff", "act", "gpl", "kpl", "hex"] {
         assert_eq!(cli::run(&s(&["palette", src, "-f", f, "-o", d])), 0, "{f}");
@@ -177,20 +177,3 @@ fn jasc_and_hex_and_act_text_palettes() {
     assert_eq!(formats::sniff(jasc), Some(Format::Palette));
 }
 
-/// FRM fabriqué (dégradé en palette Fallout) : les tests ne dépendent pas de fichiers présents sur une machine particulière.
-fn synthetic_frm() -> Vec<u8> {
-    use fallout_image_browser::convert::*;
-    let (w, h) = (24usize, 16usize);
-    let mut v = vec![255u8; w * h * 4];
-    for y in 0..h {
-        for x in 0..w {
-            let o = (y * w + x) * 4;
-            v[o] = (x * 10) as u8;
-            v[o + 1] = (y * 15) as u8;
-            v[o + 2] = ((x + y) * 6) as u8;
-        }
-    }
-    let pic = Picture::single(Format::Bmp, w as u32, h as u32, Pixels::Rgba(v), None);
-    let o = ConvertOptions { format: Format::Frm, depth: DepthChoice::Indexed(PalChoice::Fallout), dither: false, bg: [0; 3], enc: Default::default() };
-    convert_to_bytes(&pic, &o, &Selection::default()).unwrap()
-}

@@ -6,6 +6,11 @@ use fallout_image_browser::palette;
 use fallout_image_browser::palette_export::zip_store;
 use std::io::Write;
 
+/// Fichiers d'exemple versionnés avec le projet (dossier `_test_files`).
+fn sample(rel: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("_test_files").join(rel)
+}
+
 fn ctx() -> DecodeCtx {
     DecodeCtx { palette: palette::fallout(), palette_name: "Fallout".into(), ext: String::new() }
 }
@@ -549,13 +554,11 @@ fn read_only_formats_cannot_be_written() {
     }
 }
 
-/// Fichiers PSD réels (dossier de l'utilisateur) : tous doivent se décoder ; comparaison avec le PNG de même nom s'il existe.
+/// Fichiers PSD réels (`_test_files/psd`) : tous doivent se décoder ; comparaison avec le PNG de même nom s'il existe.
 #[test]
 fn real_psd_folder() {
-    let dir = std::path::Path::new(r"D:\FalloutX\Source\olym_2207\psd");
-    if !dir.exists() {
-        return;
-    }
+    let dir = sample("psd");
+    let dir = dir.as_path();
     let (mut ok, mut fail, mut cmp, mut bad) = (0, Vec::new(), 0, Vec::new());
     for e in std::fs::read_dir(dir).unwrap().flatten() {
         let p = e.path();
@@ -600,66 +603,9 @@ fn real_psd_folder() {
     assert!(fail.is_empty(), "échecs : {fail:#?}");
 }
 
-/// Trois exports de la même image fournis par l'utilisateur : PNG (référence), PDN et DDS.
-#[test]
-fn same_image_png_pdn_dds() {
-    let base = std::path::Path::new(r"C:\_\scr00000");
-    if !base.with_extension("png").exists() || !base.with_extension("pdn").exists() || !base.with_extension("dds").exists() {
-        return;
-    }
-    let reference = image::load_from_memory(&std::fs::read(base.with_extension("png")).unwrap()).unwrap().to_rgba8();
-    let mean_err = |p: &Picture| -> f64 {
-        let f = &p.frames[0];
-        assert_eq!((f.width, f.height), (reference.width(), reference.height()), "dimensions");
-        let a = rgba_of(p);
-        let (mut sum, mut n) = (0u64, 0u64);
-        for (x, y) in a.chunks_exact(4).zip(reference.as_raw().chunks_exact(4)) {
-            for c in 0..3 {
-                sum += (x[c] as i32 - y[c] as i32).unsigned_abs() as u64;
-                n += 1;
-            }
-        }
-        sum as f64 / n as f64
-    };
-    let pdn = formats::decode(Format::Pdn, &std::fs::read(base.with_extension("pdn")).unwrap(), &ctx()).unwrap();
-    println!("PDN : écart moyen {:.3} ; propriétés : {:?}", mean_err(&pdn), pdn.sections.iter().flat_map(|s| s.items.iter().map(|i| format!("{}={}", i.key, i.value))).collect::<Vec<_>>());
-    let dds = formats::decode(Format::Dds, &std::fs::read(base.with_extension("dds")).unwrap(), &ctx()).unwrap();
-    println!("DDS : écart moyen {:.3} ; propriétés : {:?}", mean_err(&dds), dds.sections.iter().flat_map(|s| s.items.iter().map(|i| format!("{}={}", i.key, i.value))).collect::<Vec<_>>());
-    assert!(mean_err(&pdn) < 0.5, "PDN doit être identique au PNG");
-    assert!(mean_err(&dds) < 12.0, "DDS (DXT1, avec pertes) doit être proche du PNG");
-}
-
-#[test]
-fn real_ora_kra_xcf_samples() {
-    let out = std::env::var("FIB_DUMP").ok();
-    for (name, fmt) in [("map.ora", Format::Ora), ("Sample-hold_sampling_stage.xcf", Format::Xcf), ("Water Lily Demo.kra", Format::Kra)] {
-        let path = std::path::Path::new(r"C:\_").join(name);
-        let Ok(data) = std::fs::read(&path) else { continue };
-        let pic = formats::decode(fmt, &data, &ctx()).unwrap_or_else(|e| panic!("{name} : {e}"));
-        let f = &pic.frames[0];
-        println!("{name} : {}x{}  {:?}", f.width, f.height, pic.sections.iter().flat_map(|s| s.items.iter().map(|i| format!("{}={}", i.key, i.value))).collect::<Vec<_>>());
-        if let Some(dir) = &out {
-            let rgba = rgba_of(&pic);
-            // aplatit sur un damier clair pour voir la transparence
-            let mut rgb = Vec::new();
-            for (i, c) in rgba.chunks_exact(4).enumerate() {
-                let (x, y) = (i % f.width as usize, i / f.width as usize);
-                let bg = if (x / 8 + y / 8) % 2 == 0 { 200u32 } else { 255 };
-                for k in 0..3 {
-                    rgb.push(((c[k] as u32 * c[3] as u32 + bg * (255 - c[3] as u32)) / 255) as u8);
-                }
-            }
-            let mut j = Vec::new();
-            jpeg_encoder::Encoder::new(&mut j, 90).encode(&rgb, f.width as u16, f.height as u16, jpeg_encoder::ColorType::Rgb).unwrap();
-            std::fs::write(std::path::Path::new(dir).join(format!("{name}.jpg")), j).unwrap();
-        }
-    }
-}
-
 #[test]
 fn png_reader_matches_image_crate_on_real_file() {
-    let p = std::path::Path::new(r"C:\_\scr00000.png");
-    let Ok(data) = std::fs::read(p) else { return };
+    let data = std::fs::read(sample("psd/about.png")).expect("_test_files/psd/about.png");
     let pic = formats::decode(Format::Png, &data, &ctx()).unwrap();
     let reference = image::load_from_memory(&data).unwrap().to_rgba8();
     assert_eq!((pic.frames[0].width, pic.frames[0].height), (reference.width(), reference.height()));
@@ -719,8 +665,7 @@ fn apng_frames_are_composited() {
 #[test]
 fn animated_gif_has_all_frames_and_delays() {
     use fallout_image_browser::convert::*;
-    let src = r"D:\Torrent\Down\Fallout of Nevada\data\art\critters\HMJMPSAA.FRM";
-    let Ok(data) = std::fs::read(src) else { return };
+    let data = std::fs::read(sample("fallout/HMJMPSAA.FRM")).expect("_test_files/fallout/HMJMPSAA.FRM");
     let frm = formats::decode(Format::Frm, &data, &ctx()).unwrap();
     let o = ConvertOptions { format: Format::Gif, depth: DepthChoice::Indexed(PalChoice::Fallout), dither: false, bg: [0; 3], enc: Default::default() };
     let gif = convert_to_bytes(&frm, &o, &Selection { dir: 1, frame: 0 }).unwrap();
@@ -1040,13 +985,11 @@ fn walk_ext(dir: &std::path::Path, ext: &str, out: &mut Vec<std::path::PathBuf>)
     }
 }
 
-/// Fichiers Fallout Tactics réels fournis par l'utilisateur (C:\_\awaken_1_4).
+/// Fichiers Fallout Tactics réels (`_test_files/tactics`) : tous doivent se décoder.
 #[test]
 fn real_fallout_tactics_files() {
-    let root = std::path::Path::new(r"C:\_\awaken_1_4");
-    if !root.exists() {
-        return;
-    }
+    let root = sample("tactics");
+    let root = root.as_path();
     let dump = std::env::var("FIB_DUMP").ok();
     for (ext, fmt) in [("zar", Format::Zar), ("til", Format::Til), ("spr", Format::Spr)] {
         let mut files = Vec::new();
@@ -1081,17 +1024,15 @@ fn real_fallout_tactics_files() {
         for f in fails.iter().take(8) {
             println!("   ÉCHEC {f}");
         }
+        assert!(fails.is_empty() && ok > 0, "{ext} : {fails:?}");
     }
 }
 
 #[test]
 fn real_spr_summary() {
-    let root = std::path::Path::new(r"C:\_\awaken_1_4\awaken\sprites");
-    if !root.exists() {
-        return;
-    }
+    let root = sample("tactics/spr");
     let mut files = Vec::new();
-    walk_ext(root, "spr", &mut files);
+    walk_ext(&root, "spr", &mut files);
     let mut stats = std::collections::BTreeMap::<String, usize>::new();
     for p in &files {
         let pic = formats::decode(Format::Spr, &std::fs::read(p).unwrap(), &ctx()).unwrap();
@@ -1107,8 +1048,10 @@ fn real_spr_summary() {
 #[test]
 fn real_til_and_recolor_dump() {
     let Ok(dump) = std::env::var("FIB_DUMP") else { return };
-    let til = std::path::Path::new(r"C:\_\FOT-Redux-v13\core\tiles\Requiem\Red-TecTiles\Objects\TreesPlants\ForestWoods");
-    let zar = std::path::Path::new(r"C:\_\awaken_1_4\awaken\gui\back");
+    let til = sample("tactics/til");
+    let til = til.as_path();
+    let zar = sample("tactics/zar");
+    let zar = zar.as_path();
     let mut jobs: Vec<(Format, std::path::PathBuf)> = Vec::new();
     if til.exists() {
         let mut v = Vec::new();

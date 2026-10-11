@@ -127,4 +127,12 @@ cargo run --release -- [file-or-folder]
 cargo test --release
 ```
 
+`.\publish.ps1` (PowerShell 7) builds the release binaries for Windows, Linux and macOS (x64 and arm64) and writes one zip per
+platform into `publish\`; run `Get-Help .\publish.ps1 -Full` for the prerequisites of the cross-compiled targets.
+On Linux (Debian, Ubuntu…) and macOS, `./publish.sh` does the same; `./publish.sh --help` lists the options and the one-time setup.
+
+GitHub Actions (`.github/workflows/build.yml`) builds and tests every push and pull request on Windows, Linux and macOS and
+keeps one zip per platform as a workflow artifact. Pushing a tag such as `v0.1.0` (it must match the version in `Cargo.toml`)
+also publishes the zips as a GitHub release.
+
 The application icon is generated from `assets/icon_source.webp` by `cargo run --release --example genicon`.

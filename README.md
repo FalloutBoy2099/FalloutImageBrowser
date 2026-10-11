@@ -3,6 +3,9 @@
 A very fast, cross-platform (Windows, Linux, macOS) image viewer and converter written in Rust with egui + wgpu.
 Inspired by *Titanium FRM Browser*.
 
+![Main window: folder tree, a Fallout 2 FRM image and its properties](_screenshots/fib_1.jpg)
+*Main window: folder tree (with `.dat` archives browsed like folders), image, and the properties panel with its palette.*
+
 ## Formats (read and write, any to any)
 
 | Format | Depths |
@@ -48,6 +51,9 @@ the images they contain without extracting them.
 DAT2 (Fallout 2, zlib) is checked against a real `master.dat`; DAT1 (Fallout 1, block LZSS) is implemented
 from the specification and checked against test archives.
 
+![A RIX image opened straight from master.dat](_screenshots/fib_2.jpg)
+*A RIX splash screen read directly from `master.dat`, with its format details and palette.*
+
 ## Interface
 
 * Bottom bar (centred): *Folder tree* checkbox, *Current folder* button (Ctrl+L: shows the current folder path in a dialog
@@ -69,6 +75,9 @@ from the specification and checked against test archives.
 * 16 languages (French, English, Spanish, Italian, Portuguese, Polish, Danish, Finnish, Greek, Hungarian,
   Dutch, Romanian, Swedish, Czech, Chinese, Russian). The default language is the system's
   (`FIB_LANG=xx` forces a language). Translations are in `assets/lang/*.txt`.
+
+![The Convert window with the target format list](_screenshots/fib_3.jpg)
+*The Convert window: target format, colour depth, dithering, file name and output folder.*
 
 Shortcuts: Space / → / ↑ next, Backspace / ← / ↓ previous, Home / End, `+` `-` zoom, Enter 100 %,
 `F` fit, `P` play, `T` folder tree, `I` properties, `F5` reload, Ctrl+O open, Ctrl+L current folder, Ctrl+E convert.

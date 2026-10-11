@@ -1,0 +1,38 @@
+[package]
+name = "fallout_shell_extension"
+version = "0.1.0"
+edition = "2024"
+description = "Windows Explorer thumbnail provider for Fallout .FRM and .RIX files (uses the decoders of Fallout Image Browser)"
+publish = false
+
+[lib]
+name = "fallout_thumbnails"
+# cdylib : la DLL enregistrée dans l'Explorateur ; rlib : pour les tests.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Les décodeurs FRM / RIX / palette sont ceux de l'application.
+fallout_image_browser = { path = ".." }
+
+[target.'cfg(windows)'.dependencies]
+# La macro `implement` de `windows` fait référence à `windows_core` : il doit être une dépendance directe.
+windows-core = "0.62"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+
+# Ce dossier est un projet à part (sa propre cible de compilation et son propre Cargo.lock).
+[workspace]
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+strip = true
+# Pas de `panic = "abort"` : les panics sont rattrapées avant de revenir dans l'Explorateur.

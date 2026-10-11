@@ -114,6 +114,12 @@ fallout_image_browser convert "weapons\Mace Glove.spr" -f png --sequence # every
 fallout_image_browser palette default.pal -f gpl                         # Fallout palette to GIMP
 ```
 
+## Explorer thumbnails (Windows)
+
+`ShellExtension\` is a separate project that makes Windows Explorer show thumbnails for `.FRM` and `.RIX` files. Run
+`.\ShellExtension\install.ps1` to install it for the current user (no administrator rights) and `uninstall.ps1` to remove it;
+see [ShellExtension/README.md](ShellExtension/README.md).
+
 ## Robustness
 
 Files are treated as untrusted input: sizes read from headers are checked before any memory is allocated, archive entry

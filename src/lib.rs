@@ -1,6 +1,7 @@
 //! FalloutImageBrowser : visionneuse et convertisseur d'images (FRM, PAL, RIX, ART, ...).
 
 pub mod app;
+pub mod assoc;
 pub mod batch;
 pub mod cli;
 pub mod convert;

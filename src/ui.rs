@@ -196,6 +196,18 @@ impl App {
         }
     }
 
+    /// Associe des extensions de fichier à l'application (menu Aide) et affiche le résultat.
+    pub fn associate_files(&mut self, types: &[crate::assoc::FileType]) {
+        let exts = crate::assoc::list(types);
+        match crate::assoc::associate(types) {
+            Ok(()) => {
+                let key = if cfg!(windows) { "assoc.done_win" } else { "assoc.done" };
+                self.toast(i18n::trf(key, &[("exts", exts)]));
+            }
+            Err(e) => self.toast(i18n::trf("assoc.failed", &[("exts", exts), ("error", e)])),
+        }
+    }
+
     pub fn open_in_default_program(&mut self) {
         if let Some(p) = self.shown.as_ref().map(|s| s.loaded.path.clone()) {
             if let Err(e) = crate::opener::open_default(&p) {
@@ -354,6 +366,18 @@ impl App {
                 }
             });
             ui.menu_button(tr("m.help"), |ui| {
+                // Associations de fichiers (indisponibles sous macOS : il faudrait un bundle d'application).
+                let can = crate::assoc::is_supported();
+                if item(ui, tr("m.assoc_fallout"), "", can) {
+                    self.associate_files(&crate::assoc::FALLOUT);
+                }
+                if item(ui, tr("m.assoc_tactics"), "", can) {
+                    self.associate_files(&crate::assoc::TACTICS);
+                }
+                if item(ui, tr("m.assoc_arcanum"), "", can) {
+                    self.associate_files(&crate::assoc::ARCANUM);
+                }
+                ui.separator();
                 if item(ui, tr("m.cli_help"), "", true) {
                     self.show_cli_help = true;
                 }

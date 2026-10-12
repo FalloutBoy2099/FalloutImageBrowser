@@ -13,7 +13,9 @@ fn detach_console() {
     if std::env::var_os("FIB_DETACHED").is_none() {
         // Relance détachée de la console (DETACHED_PROCESS) : le terminal reprend aussitôt la main.
         if let Ok(exe) = std::env::current_exe() {
-            let spawned = std::process::Command::new(exe).args(std::env::args_os().skip(1)).env("FIB_DETACHED", "1")
+            let spawned = std::process::Command::new(exe)
+                .args(std::env::args_os().skip(1))
+                .env("FIB_DETACHED", "1")
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -41,11 +43,8 @@ fn main() -> eframe::Result {
     let prefs = WinPrefs::load();
     let (rgba, width, height) = fallout_image_browser::icon::window_icon();
     let icon = eframe::egui::IconData { rgba, width, height };
-    let mut vp = eframe::egui::ViewportBuilder::default()
-        .with_min_inner_size([520.0, 360.0])
-        .with_title("Fallout Image Browser")
-        .with_icon(Arc::new(icon))
-        .with_drag_and_drop(true);
+    let mut vp =
+        eframe::egui::ViewportBuilder::default().with_min_inner_size([520.0, 360.0]).with_title("Fallout Image Browser").with_icon(Arc::new(icon)).with_drag_and_drop(true);
     vp = match prefs.size.filter(|_| prefs.remember_size) {
         Some(s) => vp.with_inner_size(s),
         None => vp.with_inner_size([1000.0, 660.0]),
@@ -53,11 +52,6 @@ fn main() -> eframe::Result {
     if let (true, Some(p)) = (prefs.remember_pos, prefs.pos) {
         vp = vp.with_position(p);
     }
-    let options = eframe::NativeOptions {
-        viewport: vp,
-        renderer: eframe::Renderer::Wgpu,
-        persist_window: false,
-        ..Default::default()
-    };
+    let options = eframe::NativeOptions { viewport: vp, renderer: eframe::Renderer::Wgpu, persist_window: false, ..Default::default() };
     eframe::run_native("FalloutImageBrowser", options, Box::new(move |cc| Ok(Box::new(App::new(cc, initial.clone())))))
 }

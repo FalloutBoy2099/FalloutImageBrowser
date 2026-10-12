@@ -33,7 +33,7 @@ undocumented, so the layers' pixel blocks are located without parsing the whole 
 in the header, the thumbnail is shown instead).
 `ASE` / `ASEPRITE` (Aseprite: animation frames recomposed from the visible layers, Normal mode),
 palette files `PAL` (Fallout, Microsoft RIFF, JASC), `ACT`, `GPL`, `KPL`, `HEX` (shown as a 16-column colour grid; the
-*Convert palette…* menu converts them from one format to another), and Fallout Tactics: `ZAR` (images), `TIL` (tiles), `SPR` (sprites: every
+*Export palette…* menu converts them from one format to another), and Fallout Tactics: `ZAR` (images), `TIL` (tiles), `SPR` (sprites: every
 animation of the file, each with its own directions, selectable in the direction list). These unofficial formats were reconstructed from
 community tools and checked against 277 ZAR, 123 SPR and 132 TIL real files; multi-image TIL files are untested.
 
@@ -47,7 +47,9 @@ stored as 24-bit so that the file stays readable everywhere).
 ## Fallout 1 and 2 .DAT archives
 
 `.dat` files appear in the tree as folders (blue icon): you can browse their sub-folders, and view and convert
-the images they contain without extracting them.
+the images they contain without extracting them. Right-click an item of an archive → *Extract…* copies it (a file, a folder
+with its sub-folders, or the whole archive) to a folder you choose; files already there are kept. The command line does the same
+with `extract`.
 DAT2 (Fallout 2, zlib) is checked against a real `master.dat`; DAT1 (Fallout 1, block LZSS) is implemented
 from the specification and checked against test archives.
 
@@ -60,16 +62,22 @@ from the specification and checked against test archives.
   where it can be edited to switch folder quickly; a folder that does not exist is ignored), previous / next image,
   zoom in / out / 100 %, fit, *Properties* checkbox.
 * Left panel: folders (lazy loading) and the images of the current folder; right panel: all the information about the
-  image (file, image, format, EXIF, palette, current frame). Two icon buttons at the bottom of the panel copy all the
-  properties to the clipboard, as text or as JSON.
-* Right-click on the image: Zoom 100 %, Convert…. Conversion is a modal window (one image at a time;
+  image (file, image, format, EXIF, palette, current frame). Icon buttons at the bottom of the panel: copy the image, copy
+  the path | copy to…, move to…, rename… (a same-name `.PAL` follows the file; archive items can only be copied) |
+  convert image…, export palette… | copy all the information as text, JSON or XML.
+* Right-click on the image: Zoom 100 %, Convert image…. Conversion is a modal window (like every dialog, with a close button at the top right and large buttons) (one image at a time;
   name, format, depth, output folder = last one used or the source file's folder).
 * The zoom level is kept from one image to the next. Animations (FRM, GIF): manual playback by default,
   with an *Autoplay* option in the View menu.
-* View menu: mouse wheel = zoom (default) or previous / next image; mouse side buttons =
-  previous / next (default) or zoom; the window size and position can be remembered.
+* Menus: *View* (panels, fit, full screen, slideshow, autoplay, smoothing, remembered window size and position), *Image*
+  (rotate and mirror the view, pixel grid, pixel information, anchor, onion skin, background), *Navigation* (current
+  folder, file sort order, mouse wheel = zoom (default) or previous / next image, mouse side buttons = previous / next
+  (default) or zoom), *Palette*, *Language* and *Help*.
 * Drag and drop of a file (its folder becomes the current folder), a folder or a `.dat` archive.
-* File → *Convert palette…* (also in the right-click menu, Ctrl+P): the palette of the current image as `.PAL` (Fallout), `.PAL` (Microsoft RIFF),
+* File → *Copy image* (Ctrl+C, also in the right-click menu) puts the displayed image (the current frame of an animation) in the clipboard.
+* Folder contents: the box above the tree filters the file names of the current folder, and View → *Sort files by* sorts them by
+  name (natural order: `img2` before `img10`), size, date or type, ascending or descending. Previous / next follow the same order.
+* File and Palette menus → *Export palette…* (also in the right-click menu, Ctrl+P): the palette of the current image as `.PAL` (Fallout), `.PAL` (Microsoft RIFF),
   `.ACT` (Adobe), `.GPL` (GIMP), `.KPL` (Krita) or `.HEX`.
 * FRM palette: the `.PAL` with the same name if present, otherwise the Fallout palette; it can be changed in the *Palette* menu.
 * 16 languages (French, English, Spanish, Italian, Portuguese, Polish, Danish, Finnish, Greek, Hungarian,
@@ -80,7 +88,7 @@ from the specification and checked against test archives.
 *The Convert window: target format, colour depth, dithering, file name and output folder.*
 
 Shortcuts: Space / → / ↑ next, Backspace / ← / ↓ previous, Home / End, `+` `-` zoom, Enter 100 %,
-`F` fit, `P` play, `T` folder tree, `I` properties, `F5` reload, Ctrl+O open, Ctrl+L current folder, Ctrl+E convert.
+`F` fit, `P` play, `T` folder tree, `I` properties, `F5` reload, Ctrl+O open, Ctrl+L current folder, Ctrl+C copy image, Ctrl+E convert.
 
 ## Command line
 
@@ -92,6 +100,7 @@ code; without arguments it opens the window (and detaches from the terminal). He
 fallout_image_browser [path]                       # opens the GUI (file, folder or .dat)
 fallout_image_browser convert <input> -f <format> [options]
 fallout_image_browser palette <input> -f pal|riff|act|gpl|kpl|hex [-o file|folder]   # the input can be an image or a palette file
+fallout_image_browser extract <input> [-o folder] [--overwrite] [-q]       # input: a .DAT archive, or a folder or file inside one
 ```
 
 * **File mode**: `<input>` is an image. Every readable format is accepted as input, including the read-only ones (PSD, PDN, XCF, KRA, ORA, ASE, ZAR, TIL, SPR, palette files); only the 14 writable formats (ART, BMP, DDS, FRM, GIF, JPEG, PCX, PNG, PNM, QOI, RIX, TIFF, TGA, WEBP) are valid for `-f`. For animations (SPR, GIF, WebP, APNG): `--frame`, `--direction`, `--sequence`.
@@ -116,7 +125,7 @@ fallout_image_browser palette default.pal -f gpl                         # Fallo
 
 ## Explorer thumbnails (Windows)
 
-`ShellExtension\` is a separate project that makes Windows Explorer show thumbnails for `.FRM` and `.RIX` files. Run
+`ShellExtension\` is a separate project that makes Windows Explorer show thumbnails for Fallout (`.FRM`, `.RIX`), Arcanum (`.ART`) and Fallout Tactics (`.ZAR`, `.TIL`, `.SPR`) files. Run
 `.\ShellExtension\install.ps1` to install it for the current user (no administrator rights) and `uninstall.ps1` to remove it;
 see [ShellExtension/README.md](ShellExtension/README.md).
 
@@ -142,3 +151,8 @@ keeps one zip per platform as a workflow artifact. Pushing a tag such as `v0.1.0
 also publishes the zips as a GitHub release.
 
 The application icon is generated from `assets/icon_source.webp` by `cargo run --release --example genicon`.
+
+## License
+
+The code of this project is released under the [MIT License](LICENSE). The sample files in `_test_files/` come from the
+original games and are not covered by it (see [_test_files/README.md](_test_files/README.md)).

@@ -8,13 +8,13 @@ pub mod frm;
 pub mod gif;
 pub mod jpeg;
 pub mod layered;
-pub mod pdn;
 pub mod palfile;
 pub mod pcx;
+pub mod pdn;
 pub mod png;
 pub mod pnm;
-pub mod qoi;
 pub mod psd;
+pub mod qoi;
 pub mod rix;
 pub mod tactics;
 pub mod tga;
@@ -118,29 +118,12 @@ pub struct Caps {
 }
 
 pub fn caps(f: Format) -> Caps {
-    let base = Caps {
-        indexed: false,
-        d16: false,
-        d24: false,
-        d32: false,
-        indexed_alpha: false,
-        multi_frame: false,
-        index0_transparent: false,
-        no_adaptive: false,
-        custom_pal: false,
-    };
+    let base =
+        Caps { indexed: false, d16: false, d24: false, d32: false, indexed_alpha: false, multi_frame: false, index0_transparent: false, no_adaptive: false, custom_pal: false };
     match f {
         Format::Art => Caps { indexed: true, indexed_alpha: true, multi_frame: true, index0_transparent: true, ..base },
         Format::Bmp => Caps { indexed: true, d16: true, d24: true, d32: true, ..base },
-        Format::Frm => Caps {
-            indexed: true,
-            indexed_alpha: true,
-            multi_frame: true,
-            index0_transparent: true,
-            no_adaptive: true,
-            custom_pal: true,
-            ..base
-        },
+        Format::Frm => Caps { indexed: true, indexed_alpha: true, multi_frame: true, index0_transparent: true, no_adaptive: true, custom_pal: true, ..base },
         Format::Gif => Caps { indexed: true, indexed_alpha: true, multi_frame: true, ..base },
         Format::Jpeg => Caps { d24: true, d32: true, ..base },
         Format::Pcx => Caps { indexed: true, d24: true, d32: true, ..base },
@@ -245,15 +228,15 @@ pub fn sniff(data: &[u8]) -> Option<Format> {
     if &data[..9] == b"gimp xcf " {
         return Some(Format::Xcf);
     }
-    if crate::zipread::Zip::is_zip(data) {
-        if let Ok(z) = crate::zipread::Zip::open(data) {
-            let mime = z.read("mimetype").unwrap_or_default();
-            if mime.starts_with(b"image/openraster") {
-                return Some(Format::Ora);
-            }
-            if mime.starts_with(b"application/x-krita") {
-                return Some(Format::Kra);
-            }
+    if crate::zipread::Zip::is_zip(data)
+        && let Ok(z) = crate::zipread::Zip::open(data)
+    {
+        let mime = z.read("mimetype").unwrap_or_default();
+        if mime.starts_with(b"image/openraster") {
+            return Some(Format::Ora);
+        }
+        if mime.starts_with(b"application/x-krita") {
+            return Some(Format::Kra);
         }
     }
     if data[0] == 0x0A && data[2] == 1 && (data[1] <= 5) {
@@ -284,7 +267,9 @@ pub fn encode(prep: &Prepared, opts: &EncodeOpts) -> Result<Vec<u8>> {
         Format::Tiff => tiff::encode(prep),
         Format::Tga => tga::encode(prep),
         Format::Webp => webp::encode(prep),
-        Format::Psd | Format::Pdn | Format::Xcf | Format::Kra | Format::Ora | Format::Ase | Format::Palette | Format::Zar | Format::Til | Format::Spr => bail!("{} : format en lecture seule", prep.format.name()),
+        Format::Psd | Format::Pdn | Format::Xcf | Format::Kra | Format::Ora | Format::Ase | Format::Palette | Format::Zar | Format::Til | Format::Spr => {
+            bail!("{} : format en lecture seule", prep.format.name())
+        }
     }
 }
 

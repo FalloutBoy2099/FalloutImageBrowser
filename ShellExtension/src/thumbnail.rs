@@ -1,8 +1,11 @@
-//! Rendu d'une vignette à partir du contenu d'un fichier FRM ou RIX (partie sans dépendance à Windows, donc testable partout).
+//! Rendu d'une vignette à partir d'un fichier Fallout (FRM, RIX), Arcanum (ART) ou Fallout Tactics (ZAR, TIL, SPR) (partie sans dépendance à Windows, donc testable partout).
 
 use fallout_image_browser::formats::{self, DecodeCtx};
-use fallout_image_browser::model::{Format, frame_to_rgba};
+use fallout_image_browser::model::Palette;
+use fallout_image_browser::model::{Format, Picture, frame_to_rgba};
 use fallout_image_browser::palette;
+use std::path::Path;
+use std::sync::Arc;
 
 /// Taille maximale lue dans le flux : un fichier plus gros n'est pas une image Fallout.
 pub const MAX_INPUT: usize = 64 << 20;
@@ -22,7 +25,7 @@ fn detect(data: &[u8]) -> Format {
     formats::sniff(data).unwrap_or(Format::Frm)
 }
 
-/// Décode le fichier (palette Fallout par défaut, première image de la première direction) et le réduit pour que
+/// Décode le contenu d'un flux (palette Fallout par défaut, première image de la première direction) et le réduit pour que
 /// sa plus grande dimension ne dépasse pas `max_size`. Une image plus petite n'est pas agrandie.
 pub fn render(data: &[u8], max_size: u32) -> Result<Thumb, String> {
     if data.len() > MAX_INPUT {
@@ -30,6 +33,47 @@ pub fn render(data: &[u8], max_size: u32) -> Result<Thumb, String> {
     }
     let ctx = DecodeCtx { palette: palette::fallout(), palette_name: "Fallout".into(), ext: String::new() };
     let pic = formats::decode(detect(data), data, &ctx).map_err(|e| e.to_string())?;
+    render_picture(&pic, max_size)
+}
+
+/// Palette d'un `.PAL` du même nom que le fichier (dans le même dossier), s'il existe et se lit.
+fn sibling_palette(path: &Path) -> Option<Arc<Palette>> {
+    ["pal", "PAL", "Pal"].iter().find_map(|ext| {
+        let p = path.with_extension(ext);
+        let len = std::fs::metadata(&p).ok()?.len();
+        (p.is_file() && len < 1 << 20).then_some(())?;
+        palette::parse_pal(&std::fs::read(&p).ok()?).ok().map(Arc::new)
+    })
+}
+
+/// Vignette d'un contenu accompagné du nom que le flux déclare (nom seul, chemin complet ou rien) : l'extension choisit le
+/// format (ART n'a pas de signature), et si le nom est un chemin complet un `.PAL` du même nom remplace la palette Fallout,
+/// comme dans l'application. Un `.PAL` illisible (accès refusé par l'isolation…) est simplement ignoré.
+pub fn render_named(data: &[u8], name: Option<&str>, max_size: u32) -> Result<Thumb, String> {
+    if data.len() > MAX_INPUT {
+        return Err("fichier trop volumineux".into());
+    }
+    let path = name.map(Path::new);
+    let ext = path.and_then(|p| p.extension()).map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let format = Format::from_ext(&ext).unwrap_or_else(|| detect(data));
+    let palette = path.filter(|p| p.is_absolute()).and_then(sibling_palette).unwrap_or_else(palette::fallout);
+    let ctx = DecodeCtx { palette, palette_name: "Fallout".into(), ext };
+    let pic = formats::decode(format, data, &ctx).map_err(|e| e.to_string())?;
+    render_picture(&pic, max_size)
+}
+
+/// Vignette d'un fichier du disque (mêmes règles que `render_named`).
+pub fn render_file(path: &Path, max_size: u32) -> Result<Thumb, String> {
+    let len = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if len > MAX_INPUT as u64 {
+        return Err("fichier trop volumineux".into());
+    }
+    let data = std::fs::read(path).map_err(|e| e.to_string())?;
+    render_named(&data, Some(&path.to_string_lossy()), max_size)
+}
+
+/// Première image de la première direction, réduite à `max_size`.
+pub fn render_picture(pic: &Picture, max_size: u32) -> Result<Thumb, String> {
     let frame = pic.frames.first().ok_or("aucune image")?;
     let rgba = frame_to_rgba(frame, pic.palette.as_ref());
     let (w, h) = (frame.width as usize, frame.height as usize);

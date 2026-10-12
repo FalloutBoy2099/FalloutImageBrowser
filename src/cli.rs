@@ -31,6 +31,11 @@ USAGE
       | act (Adobe) | gpl (GIMP) | kpl (Krita) | hex. INPUT may itself be a palette file (PAL, ACT, GPL, KPL,
       HEX): this converts one palette format to another.
 
+  fallout_image_browser extract <INPUT> [-o DIR] [--overwrite] [-q]
+      Extract files from a .DAT archive without converting them. INPUT is an archive, a folder inside it
+      (archive.dat\\art\\intrface) or one file; the sub-folder layout is kept. Default output folder:
+      ./<archive name>. Existing files are kept unless --overwrite is given.
+
   fallout_image_browser --formats       list the formats and the colour depths each one accepts
   fallout_image_browser /?              this help        (also: -h, --help, -?, help)
   fallout_image_browser --version
@@ -70,6 +75,8 @@ EXAMPLES
   fallout_image_browser convert gui\\charcreate.zar -f png -d 32         (Fallout Tactics ZAR to PNG)
   fallout_image_browser convert sprites\\Mace.spr -f png --sequence      (every frame of a Fallout Tactics SPR)
   fallout_image_browser palette default.pal -f gpl                      (palette file to GIMP palette)
+  fallout_image_browser extract D:\\Fallout2\\master.dat -o master        (every file of the archive)
+  fallout_image_browser extract master.dat\\art\\intrface -o ui           (one folder of the archive)
 ";
 
 /// Nom de l'exécutable utilisé (sans extension) : l'aide s'adapte s'il est renommé.
@@ -89,7 +96,17 @@ pub fn usage() -> String {
 pub fn is_cli(args: &[String]) -> bool {
     matches!(
         args.first().map(|s| s.as_str()),
-        Some("convert") | Some("palette") | Some("-h") | Some("--help") | Some("help") | Some("/?") | Some("-?") | Some("--formats") | Some("--version") | Some("-V")
+        Some("convert")
+            | Some("palette")
+            | Some("extract")
+            | Some("-h")
+            | Some("--help")
+            | Some("help")
+            | Some("/?")
+            | Some("-?")
+            | Some("--formats")
+            | Some("--version")
+            | Some("-V")
     )
 }
 
@@ -152,9 +169,8 @@ fn parse(args: &[String]) -> Result<Args, String> {
     let (mut have_input, mut have_format) = (false, false);
     while let Some(arg) = it.next() {
         let mut val = |what: &str| it.next().cloned().ok_or_else(|| format!("missing value for {what}"));
-        let index = |s: String, what: &str| -> Result<usize, String> {
-            s.parse::<usize>().ok().filter(|n| *n >= 1).map(|n| n - 1).ok_or_else(|| format!("{what} expects a number >= 1"))
-        };
+        let index =
+            |s: String, what: &str| -> Result<usize, String> { s.parse::<usize>().ok().filter(|n| *n >= 1).map(|n| n - 1).ok_or_else(|| format!("{what} expects a number >= 1")) };
         match arg.as_str() {
             "-f" | "--format" => {
                 let v = val("--format")?;
@@ -313,6 +329,49 @@ fn print_out(s: &str) {
     let _ = o.flush();
 }
 
+/// `extract <entrée> [-o dossier] [--overwrite] [-q]` : extrait des fichiers d'une archive .DAT, sans conversion.
+fn run_extract(args: &[String]) -> i32 {
+    if args.iter().any(|a| matches!(a.as_str(), "-h" | "--help" | "/?" | "-?")) {
+        print_out(&usage());
+        return 0;
+    }
+    let (mut input, mut out, mut overwrite, mut quiet) = (None, None, false, false);
+    let mut it = args.iter().skip(1);
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "-o" | "--out" => out = it.next().map(PathBuf::from),
+            "--overwrite" => overwrite = true,
+            "-q" | "--quiet" => quiet = true,
+            s if s.starts_with('-') => {
+                eprintln!("error: unknown option: {s}");
+                return 2;
+            }
+            _ => input = Some(PathBuf::from(a)),
+        }
+    }
+    let Some(input) = input else {
+        eprintln!("error: usage: extract <INPUT> [-o DIR] [--overwrite] [-q]");
+        return 2;
+    };
+    let Some((archive, _)) = crate::dat::split(&input) else {
+        eprintln!("error: INPUT must be a .DAT archive, or a folder or file inside one: {}", input.display());
+        return 2;
+    };
+    let out = out.unwrap_or_else(|| PathBuf::from(archive.file_stem().unwrap_or_default()));
+    match crate::dat::extract(&input, &out, overwrite) {
+        Ok(r) => {
+            if !quiet || r.skipped > 0 {
+                println!("{} extracted, {} skipped (already present)  ->  {}", r.written, r.skipped, out.display());
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("FAIL  {}  :  {e}", input.display());
+            1
+        }
+    }
+}
+
 /// `palette <entrée> -f <format> [-o fichier|dossier] [--read-pal p]`.
 fn run_palette(args: &[String]) -> i32 {
     use crate::palette_export::{self, PalFormat};
@@ -389,8 +448,12 @@ pub fn run(args: &[String]) -> i32 {
     let first = args.first().map(|s| s.as_str()).unwrap_or("");
     match first {
         "-V" | "--version" => {
-            print_out(&format!("{} {}
-", exe_name(), env!("CARGO_PKG_VERSION")));
+            print_out(&format!(
+                "{} {}
+",
+                exe_name(),
+                env!("CARGO_PKG_VERSION")
+            ));
             return 0;
         }
         "--formats" => {
@@ -399,6 +462,7 @@ pub fn run(args: &[String]) -> i32 {
         }
         "convert" => {}
         "palette" => return run_palette(args),
+        "extract" => return run_extract(args),
         _ => {
             print_out(&usage());
             return 0;
@@ -411,9 +475,12 @@ pub fn run(args: &[String]) -> i32 {
     let a = match parse(args) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("error: {e}
+            eprintln!(
+                "error: {e}
 
-Try: {} --help", exe_name());
+Try: {} --help",
+                exe_name()
+            );
             return 2;
         }
     };
@@ -482,11 +549,7 @@ Try: {} --help", exe_name());
         }
         _ => None,
     };
-    let job = Job {
-        opts: ConvertOptions { format: a.format, depth, dither: a.dither, bg: a.bg, enc: EncodeOpts { jpeg_quality: a.quality } },
-        seq: a.seq,
-        policy,
-    };
+    let job = Job { opts: ConvertOptions { format: a.format, depth, dither: a.dither, bg: a.bg, enc: EncodeOpts { jpeg_quality: a.quality } }, seq: a.seq, policy };
     let sel = Selection { dir: a.dir, frame: a.frame };
     let total = inputs.len();
     let counters = Mutex::new((0usize, 0usize));

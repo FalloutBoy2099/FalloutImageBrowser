@@ -111,11 +111,7 @@ fn parse(data: &[u8], ext: &str) -> Result<(Palette, &'static str, Option<String
     // ACT (772 octets avec en-queue) ou 768 octets : Fallout PAL (6 bits) ou ACT selon l'extension.
     if data.len() == 772 || (ext == "act" && data.len() >= 768) {
         let mut p = Palette::empty();
-        let (count, transp) = if data.len() >= 772 {
-            (u16::from_be_bytes([data[768], data[769]]) as usize, u16::from_be_bytes([data[770], data[771]]))
-        } else {
-            (256, 0xFFFF)
-        };
+        let (count, transp) = if data.len() >= 772 { (u16::from_be_bytes([data[768], data[769]]) as usize, u16::from_be_bytes([data[770], data[771]])) } else { (256, 0xFFFF) };
         for i in 0..count.clamp(1, 256) {
             p.colors[i] = [data[i * 3], data[i * 3 + 1], data[i * 3 + 2], 255];
             p.used[i] = true;

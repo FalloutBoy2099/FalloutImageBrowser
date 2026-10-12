@@ -27,21 +27,39 @@ $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
 if (-not $Dll) {
-    if (-not $NoBuild) {
-        & cargo build --release --locked
-        if ($LASTEXITCODE -ne 0) { throw "cargo build failed (exit code $LASTEXITCODE)" }
+    $beside = Join-Path $PSScriptRoot 'fallout_thumbnails.dll'
+    if (Test-Path $beside) {
+        # Downloaded release package: the DLL is next to this script, nothing to build.
+        $Dll = $beside
     }
-    $Dll = Join-Path $PSScriptRoot 'target\release\fallout_thumbnails.dll'
+    else {
+        if (-not $NoBuild) {
+            & cargo build --release --locked
+            if ($LASTEXITCODE -ne 0) { throw "cargo build failed (exit code $LASTEXITCODE)" }
+        }
+        $Dll = Join-Path $PSScriptRoot 'target\release\fallout_thumbnails.dll'
+    }
 }
 if (-not (Test-Path $Dll)) { throw "DLL not found: $Dll" }
 
 New-Item -ItemType Directory -Force $InstallDir | Out-Null
 $target = Join-Path $InstallDir 'fallout_thumbnails.dll'
 
+# Explorer runs thumbnail providers in separate dllhost.exe processes that stay alive for a while. One that still has an
+# older copy of the DLL loaded would keep using it (and lock the file), so those processes are closed; Windows starts a
+# new one on demand.
+function Stop-ThumbnailHosts {
+    Get-Process dllhost -ErrorAction SilentlyContinue |
+        Where-Object { try { $_.Modules.ModuleName -contains 'fallout_thumbnails.dll' } catch { $false } } |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+}
+
 # An older copy may be registered and loaded: unregister it first so the file can be replaced.
 if (Test-Path $target) {
     Start-Process regsvr32.exe -ArgumentList '/s', '/u', "`"$target`"" -Wait | Out-Null
 }
+Stop-ThumbnailHosts
 for ($i = 1; ; $i++) {
     try { Copy-Item $Dll $target -Force; break }
     catch {
@@ -52,5 +70,7 @@ for ($i = 1; ; $i++) {
 
 $p = Start-Process regsvr32.exe -ArgumentList '/s', "`"$target`"" -Wait -PassThru
 if ($p.ExitCode -ne 0) { throw "regsvr32 failed (exit code $($p.ExitCode))" }
+# A thumbnail host started before the registration must not keep serving an older provider.
+Stop-ThumbnailHosts
 Write-Host "Installed: $target" -ForegroundColor Green
-Write-Host '.FRM and .RIX files now get thumbnails in Explorer (palette: Fallout default.pal, first image of the first direction).'
+Write-Host '.FRM, .RIX, .ART, .ZAR, .TIL and .SPR files now get thumbnails in Explorer (first image of the first direction; Fallout default.pal palette).'

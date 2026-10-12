@@ -37,7 +37,7 @@ pub fn decode(data: &[u8], ctx: &DecodeCtx) -> Result<Picture> {
     pic.dir_shift = (0..dirs).map(|d| (sx[d] as i32, sy[d] as i32)).collect();
     pic.palette = Some((*ctx.palette).clone());
     pic.bpp = 8;
-    let delay = (1000 / pic.fps.max(1)) as u32;
+    let delay = 1000 / pic.fps.max(1);
     let mut frame_rows: Vec<String> = Vec::new();
     for d in 0..dirs {
         let mut pos = HEADER + offs[d] as usize;
@@ -54,13 +54,7 @@ pub fn decode(data: &[u8], ctx: &DecodeCtx) -> Result<Picture> {
             cx += dx;
             cy += dy;
             let (w1, h1, idx) = if npx == 0 { (1usize, 1usize, vec![0u8]) } else { (w, h, px.to_vec()) };
-            pic.frames.push(Frame {
-                width: w1 as u32,
-                height: h1 as u32,
-                pixels: Pixels::Indexed(idx),
-                pos: (cx - (w1 as i32) / 2, cy - h1 as i32),
-                delay_ms: Some(delay),
-            });
+            pic.frames.push(Frame { width: w1 as u32, height: h1 as u32, pixels: Pixels::Indexed(idx), pos: (cx - (w1 as i32) / 2, cy - h1 as i32), delay_ms: Some(delay) });
             if d == 0 && frame_rows.len() < 64 {
                 frame_rows.push(format!("{w}×{h}  ({dx:+}, {dy:+})"));
             }
@@ -144,4 +138,60 @@ pub fn encode(p: &Prepared) -> Result<Vec<u8>> {
     put_u32be(&mut o, body.len() as u32);
     o.extend_from_slice(&body);
     Ok(o)
+}
+
+/// Champs de l'en-tête d'un FRM que l'on peut modifier sans toucher aux images.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrmHeader {
+    pub version: u32,
+    pub fps: u16,
+    pub action_frame: u16,
+    pub frames_per_direction: u16,
+    pub shift_x: [i16; 6],
+    pub shift_y: [i16; 6],
+    /// Nombre de directions (déduit des décalages de données : au moins 1, au plus 6).
+    pub directions: usize,
+}
+
+/// Lit l'en-tête d'un FRM.
+pub fn read_header(data: &[u8]) -> Result<FrmHeader> {
+    if data.len() < HEADER {
+        bail!("FRM trop court pour contenir un en-tête");
+    }
+    let mut r = Rd::new(data);
+    let version = r.u32be()?;
+    let fps = r.u16be()?;
+    let action_frame = r.u16be()?;
+    let frames_per_direction = r.u16be()?;
+    let mut shift_x = [0i16; 6];
+    let mut shift_y = [0i16; 6];
+    let mut offs = [0u32; 6];
+    for v in shift_x.iter_mut() {
+        *v = r.i16be()?;
+    }
+    for v in shift_y.iter_mut() {
+        *v = r.i16be()?;
+    }
+    for v in offs.iter_mut() {
+        *v = r.u32be()?;
+    }
+    let directions = (1..6).rev().find(|&d| offs[d] != 0).map(|d| d + 1).unwrap_or(1);
+    Ok(FrmHeader { version, fps, action_frame, frames_per_direction, shift_x, shift_y, directions })
+}
+
+/// Copie du FRM dont l'en-tête reçoit `fps`, l'image d'action et les décalages ; les images et tous les autres octets sont
+/// conservés tels quels. L'image d'action doit exister (inférieure au nombre d'images par direction).
+pub fn patch_header(data: &[u8], fps: u16, action_frame: u16, shift_x: [i16; 6], shift_y: [i16; 6]) -> Result<Vec<u8>> {
+    let h = read_header(data)?;
+    if action_frame >= h.frames_per_direction {
+        bail!("l'image d'action ({action_frame}) doit être inférieure au nombre d'images par direction ({})", h.frames_per_direction);
+    }
+    let mut out = data.to_vec();
+    out[4..6].copy_from_slice(&fps.to_be_bytes());
+    out[6..8].copy_from_slice(&action_frame.to_be_bytes());
+    for d in 0..6 {
+        out[10 + d * 2..12 + d * 2].copy_from_slice(&shift_x[d].to_be_bytes());
+        out[22 + d * 2..24 + d * 2].copy_from_slice(&shift_y[d].to_be_bytes());
+    }
+    Ok(out)
 }

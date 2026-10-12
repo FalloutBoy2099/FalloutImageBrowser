@@ -297,9 +297,23 @@ pub fn decode(data: &[u8]) -> Result<Picture> {
     pic.bpp = 32;
     let s = pic.section("sec.format");
     s.add("p.version", if version == 0 { "0".to_string() } else { version.to_string() });
-    s.raw("Base type", match base { 0 => "RGB", 1 => "Grayscale", _ => "Indexed" });
+    s.raw(
+        "Base type",
+        match base {
+            0 => "RGB",
+            1 => "Grayscale",
+            _ => "Indexed",
+        },
+    );
     s.add("p.precision", if version >= 7 { precision.to_string() } else { "8".to_string() });
-    s.add("p.compression", match c.compression { 0 => "p.none", 1 => "RLE", _ => "zlib" });
+    s.add(
+        "p.compression",
+        match c.compression {
+            0 => "p.none",
+            1 => "RLE",
+            _ => "zlib",
+        },
+    );
     s.add("p.layers", layer_ptrs.len());
     s.raw("Visible layers composed", used);
     if groups > 0 {

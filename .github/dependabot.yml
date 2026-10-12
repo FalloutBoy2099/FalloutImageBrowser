@@ -1,0 +1,23 @@
+# Weekly pull requests for outdated dependencies (Rust crates of both projects, and the GitHub Actions the workflow uses).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      rust-dependencies:
+        patterns: ['*']
+  - package-ecosystem: cargo
+    directory: /ShellExtension
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      rust-dependencies:
+        patterns: ['*']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

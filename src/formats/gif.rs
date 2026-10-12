@@ -169,7 +169,7 @@ pub fn encode(p: &Prepared) -> Result<Vec<u8>> {
                 top: (f.pos.1 - y0) as u16,
                 buffer: std::borrow::Cow::Borrowed(idx),
                 transparent: trans,
-                delay: (f.delay_ms.unwrap_or(100) / 10).max(1).min(65535) as u16,
+                delay: (f.delay_ms.unwrap_or(100) / 10).clamp(1, 65535) as u16,
                 dispose: if p.frames.len() > 1 { gifc::DisposalMethod::Background } else { gifc::DisposalMethod::Keep },
                 ..gifc::Frame::default()
             };

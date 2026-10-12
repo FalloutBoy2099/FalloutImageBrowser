@@ -28,6 +28,23 @@ pub struct Settings {
     pub lang: Option<Lang>,
     pub show_tree: bool,
     pub show_props: bool,
+    /// Tri des fichiers d'un dossier.
+    pub sort: crate::tree::SortKey,
+    pub sort_desc: bool,
+    /// Fond derrière l'image, grille de pixels, infos du pixel sous la souris, repère d'ancrage, pelure d'oignon.
+    pub background: crate::view::Background,
+    /// Couleur du fond « personnalisé ».
+    pub bg_custom: [u8; 3],
+    /// Opacité (0 à 255) du fond « personnalisé » ; en dessous de 255, le damier se voit à travers.
+    pub bg_alpha: u8,
+    /// Couleurs récemment choisies pour le fond personnalisé (la plus récente en premier).
+    pub bg_recent: Vec<[u8; 3]>,
+    pub show_grid: bool,
+    pub show_pixel_info: bool,
+    pub show_origin: bool,
+    pub onion: bool,
+    /// Délai du diaporama en secondes.
+    pub slideshow_secs: u32,
     pub last_dir: Option<PathBuf>,
     /// 0 = auto, 1 = Fallout, 2 = personnalisée
     pub pal_mode: u8,
@@ -51,6 +68,17 @@ impl Default for Settings {
             lang: None,
             show_tree: true,
             show_props: false,
+            sort: Default::default(),
+            sort_desc: false,
+            background: Default::default(),
+            bg_custom: [64, 64, 64],
+            bg_alpha: 255,
+            bg_recent: Vec::new(),
+            show_grid: false,
+            show_pixel_info: true,
+            show_origin: false,
+            onion: false,
+            slideshow_secs: 3,
             last_dir: None,
             pal_mode: 0,
             pal_path: None,
@@ -65,6 +93,13 @@ impl Default for Settings {
     }
 }
 
+/// État de la fenêtre « Renommer » : fichier, nom en cours de saisie, première image (pour sélectionner le nom).
+pub struct RenameDlg {
+    pub path: PathBuf,
+    pub name: String,
+    pub fresh: bool,
+}
+
 pub struct TexEntry {
     pub handle: TextureHandle,
 }
@@ -73,7 +108,8 @@ pub struct Shown {
     pub loaded: Arc<Loaded>,
     pub dir: usize,
     pub frame: usize,
-    pub tex: HashMap<(usize, usize, u8), TexEntry>,
+    /// Textures : (direction, image, niveau de réduction, transformation de la vue).
+    pub tex: HashMap<(usize, usize, u8, u8), TexEntry>,
     pub playing: bool,
     pub clock: f32,
 }
@@ -112,10 +148,10 @@ impl Cache {
         self.order.retain(|x| *x != p);
         self.order.push_back(p);
         while (self.order.len() > 12 || self.bytes > 700_000_000) && self.order.len() > 1 {
-            if let Some(old) = self.order.pop_front() {
-                if let Some(v) = self.map.remove(&old) {
-                    self.bytes = self.bytes.saturating_sub(est_bytes(&v));
-                }
+            if let Some(old) = self.order.pop_front()
+                && let Some(v) = self.map.remove(&old)
+            {
+                self.bytes = self.bytes.saturating_sub(est_bytes(&v));
             }
         }
     }
@@ -152,6 +188,25 @@ pub struct App {
     pub expand_confirm: Option<PathBuf>,
     /// Boîte « Dossier courant » : (chemin en cours d'édition, première image).
     pub folder_dlg: Option<(String, bool)>,
+    /// Fenêtre « Renommer » du fichier affiché.
+    pub rename_dlg: Option<RenameDlg>,
+    /// Texte du filtre de fichiers (zone de saisie au-dessus de l'arborescence).
+    pub file_filter: String,
+    /// Fenêtre du sélecteur de couleur du fond personnalisé.
+    pub bg_picker_open: bool,
+    /// Sélecteur de couleur : fond et couleur au moment de l'ouverture (rétablis par Annuler), teinte / saturation / valeur et texte hexadécimal en cours.
+    pub bg_picker_prev: (crate::view::Background, [u8; 3], u8),
+    pub bg_hsv: (f32, f32, f32),
+    pub bg_hex: String,
+    /// Largeur du contenu de l'arborescence (version des lignes, largeur) : sert à la barre de défilement horizontale.
+    pub tree_w: (u64, f32),
+    /// Rotation et symétries de la vue (l'image n'est pas modifiée) ; plein écran ; diaporama et heure du dernier changement.
+    pub transform: crate::view::Transform,
+    pub fullscreen: bool,
+    pub slideshow: bool,
+    pub slideshow_t: f64,
+    /// Extraction d'archive en cours (thread) : résultat et dossier de sortie.
+    pub extract_job: Option<(std::sync::mpsc::Receiver<Result<crate::dat::Extracted, String>>, std::path::PathBuf)>,
     pub tree_scroll_to: Option<usize>,
     pub last_title: String,
     pub toolbar_w: f32,
@@ -185,6 +240,18 @@ impl App {
             show_cli_help: false,
             expand_confirm: None,
             folder_dlg: None,
+            rename_dlg: None,
+            file_filter: String::new(),
+            bg_picker_open: false,
+            bg_picker_prev: (crate::view::Background::Checker, [64, 64, 64], 255),
+            bg_hsv: (0.0, 0.0, 0.25),
+            bg_hex: String::new(),
+            tree_w: (u64::MAX, 0.0),
+            transform: Default::default(),
+            fullscreen: false,
+            slideshow: false,
+            slideshow_t: 0.0,
+            extract_job: None,
             tree_scroll_to: None,
             last_title: String::new(),
             toolbar_w: 0.0,
@@ -192,6 +259,8 @@ impl App {
             settings,
         };
         app.apply_fonts(&cc.egui_ctx);
+        app.tree.sort = app.settings.sort;
+        app.tree.descending = app.settings.sort_desc;
         match (app.settings.pal_mode, app.settings.pal_path.clone()) {
             (1, _) => app.policy = PalPolicy::Fallout,
             (2, Some(p)) => {
@@ -289,6 +358,18 @@ impl App {
             }
         } else if let Some(w) = &self.wanted {
             self.index = self.files.iter().position(|f| f == w);
+        }
+    }
+
+    /// Applique le tri et le filtre choisis : la liste des fichiers (et donc précédent / suivant) suit l'arborescence.
+    pub fn apply_view_options(&mut self) {
+        self.tree.sort = self.settings.sort;
+        self.tree.descending = self.settings.sort_desc;
+        self.tree.filter = self.file_filter.clone();
+        self.tree.rebuild();
+        if let Some(dir) = self.tree.selected_dir.clone() {
+            self.files = self.tree.files_of(&dir);
+            self.index = self.wanted.as_ref().and_then(|w| self.files.iter().position(|f| f == w));
         }
     }
 
@@ -497,12 +578,16 @@ impl eframe::App for App {
             egui::Panel::right("props").resizable(true).default_size(320.0).size_range(160.0..=800.0).show(ui, |ui| self.props_panel(ui));
         }
         egui::CentralPanel::no_frame().show(ui, |ui| self.canvas(ui));
+        self.poll_extract(&ctx);
+        self.tick_slideshow(&ctx);
         self.convert_window(&ctx);
         self.palette_window(&ctx);
         self.about_window(&ctx);
         self.cli_help_window(&ctx);
         self.expand_confirm_window(&ctx);
         self.folder_window(&ctx);
+        self.rename_window(&ctx);
+        self.bg_picker_window(&ctx);
         self.toast_overlay(&ctx);
         if self.is_loading() {
             ctx.request_repaint_after(Duration::from_millis(50));

@@ -108,16 +108,8 @@ pub fn remap_table(src: &Palette, dst: &Palette, mapper: &Mapper) -> [u8; 256] {
             tr
         } else if !src.used[i] {
             // Entrée inutilisée dans les deux palettes (ex. couleurs animées 229-254) : index conservé.
-            if !dst.used[i] {
-                i as u8
-            } else {
-                mapper.transparent.unwrap_or_else(|| mapper.nearest(0, 0, 0))
-            }
-        } else if dst.used[i]
-            && dst.colors[i][3] > 0
-            && Some(i as u8) != mapper.transparent
-            && dst.colors[i][..3] == c[..3]
-        {
+            if !dst.used[i] { i as u8 } else { mapper.transparent.unwrap_or_else(|| mapper.nearest(0, 0, 0)) }
+        } else if dst.used[i] && dst.colors[i][3] > 0 && Some(i as u8) != mapper.transparent && dst.colors[i][..3] == c[..3] {
             i as u8
         } else {
             mapper.nearest(c[0], c[1], c[2])
@@ -148,10 +140,9 @@ pub fn quantize_rgba(rgba: &[u8], w: usize, h: usize, pal: &Palette, mapper: &Ma
         out.par_chunks_mut(w.max(1)).enumerate().for_each(|(y, row)| {
             for x in 0..w {
                 let p = &rgba[(y * w + x) * 4..(y * w + x) * 4 + 4];
-                row[x] = if p[3] < 128 && mapper.transparent.is_some() {
-                    mapper.transparent.unwrap()
-                } else {
-                    mapper.nearest(p[0], p[1], p[2])
+                row[x] = match mapper.transparent {
+                    Some(t) if p[3] < 128 => t,
+                    _ => mapper.nearest(p[0], p[1], p[2]),
                 };
             }
         });
@@ -168,16 +159,12 @@ pub fn quantize_rgba(rgba: &[u8], w: usize, h: usize, pal: &Palette, mapper: &Ma
         for step in 0..w {
             let x = if ltr { step } else { w - 1 - step };
             let p = &rgba[(y * w + x) * 4..(y * w + x) * 4 + 4];
-            if p[3] < 128 && mapper.transparent.is_some() {
-                out[y * w + x] = mapper.transparent.unwrap();
+            if let Some(t) = mapper.transparent.filter(|_| p[3] < 128) {
+                out[y * w + x] = t;
                 continue;
             }
             let e = cur[x + 1];
-            let c = [
-                (p[0] as i32 + e[0] / 16).clamp(0, 255),
-                (p[1] as i32 + e[1] / 16).clamp(0, 255),
-                (p[2] as i32 + e[2] / 16).clamp(0, 255),
-            ];
+            let c = [(p[0] as i32 + e[0] / 16).clamp(0, 255), (p[1] as i32 + e[1] / 16).clamp(0, 255), (p[2] as i32 + e[2] / 16).clamp(0, 255)];
             let i = mapper.nearest(c[0] as u8, c[1] as u8, c[2] as u8);
             out[y * w + x] = i;
             let q = pal.colors[i as usize];
@@ -234,7 +221,7 @@ pub fn adaptive_palette(frames: &[&[u8]], reserve_transparent: bool, bg: [u8; 3]
                 if p[3] < 128 {
                     continue;
                 }
-                if n % step == 0 {
+                if n.is_multiple_of(step) {
                     sample.extend_from_slice(&[p[0], p[1], p[2], 255]);
                 }
                 n += 1;

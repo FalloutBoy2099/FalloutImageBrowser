@@ -34,10 +34,7 @@ impl<'a> Zip<'a> {
     pub fn open(data: &'a [u8]) -> Result<Zip<'a>> {
         // Fin de répertoire central : on cherche la signature en partant de la fin.
         let min = data.len().saturating_sub(22 + 65535);
-        let eocd = (min..=data.len().saturating_sub(22))
-            .rev()
-            .find(|&i| data.get(i..i + 4) == Some(&[0x50, 0x4B, 0x05, 0x06]))
-            .ok_or_else(|| anyhow!("archive ZIP invalide"))?;
+        let eocd = (min..=data.len().saturating_sub(22)).rev().find(|&i| data.get(i..i + 4) == Some(&[0x50, 0x4B, 0x05, 0x06])).ok_or_else(|| anyhow!("archive ZIP invalide"))?;
         let count = u16le(data, eocd + 10)? as usize;
         let mut p = u32le(data, eocd + 16)? as usize;
         let mut entries = Vec::with_capacity(count);

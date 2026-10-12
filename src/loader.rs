@@ -134,10 +134,7 @@ pub fn load_file(path: &Path, policy: &PalPolicy) -> Result<Loaded, String> {
         PalPolicy::Fallout => (palette::fallout(), "Fallout (default.pal)".into()),
         PalPolicy::Custom(p, n) => (p.clone(), n.clone()),
         PalPolicy::Auto => match find_sibling_pal(path).and_then(|p| load_pal_file(&p).ok().map(|pal| (pal, p))) {
-            Some((pal, p)) => (
-                Arc::new(pal),
-                p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
-            ),
+            Some((pal, p)) => (Arc::new(pal), p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
             None => (palette::fallout(), "Fallout (default.pal)".into()),
         },
     };

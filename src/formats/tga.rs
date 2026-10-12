@@ -214,10 +214,7 @@ pub fn encode(p: &Prepared) -> Result<Vec<u8>> {
             for c in px.chunks_exact(4) {
                 match bpp {
                     16 => {
-                        let v = ((c[0] as u16 >> 3) << 10)
-                            | ((c[1] as u16 >> 3) << 5)
-                            | (c[2] as u16 >> 3)
-                            | if c[3] >= 128 { 0x8000 } else { 0 };
+                        let v = ((c[0] as u16 >> 3) << 10) | ((c[1] as u16 >> 3) << 5) | (c[2] as u16 >> 3) | if c[3] >= 128 { 0x8000 } else { 0 };
                         put_u16le(&mut o, v);
                     }
                     24 => o.extend_from_slice(&[c[2], c[1], c[0]]),

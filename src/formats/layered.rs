@@ -157,7 +157,10 @@ pub fn decode_kra(data: &[u8]) -> Result<Picture> {
             s.raw("Color space", cs);
         }
         if let (Some(x), Some(y)) = (attr(img, "x-res"), attr(img, "y-res")) {
-            s.add("p.dpi", format!("{} × {}", x.parse::<f64>().map(|v| format!("{v:.0}")).unwrap_or(x.to_string()), y.parse::<f64>().map(|v| format!("{v:.0}")).unwrap_or(y.to_string())));
+            s.add(
+                "p.dpi",
+                format!("{} × {}", x.parse::<f64>().map(|v| format!("{v:.0}")).unwrap_or(x.to_string()), y.parse::<f64>().map(|v| format!("{v:.0}")).unwrap_or(y.to_string())),
+            );
         }
     }
     s.add("p.layers", tags(&doc, "layer").len());

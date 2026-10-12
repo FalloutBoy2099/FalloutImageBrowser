@@ -32,13 +32,7 @@ pub fn decode(data: &[u8]) -> Result<Picture> {
             total += ms;
             let b = f.buffer();
             check_dims(b.width() as u64, b.height() as u64)?;
-            pic.frames.push(Frame {
-                width: b.width(),
-                height: b.height(),
-                pixels: Pixels::Rgba(b.as_raw().clone()),
-                pos: (0, 0),
-                delay_ms: Some(ms),
-            });
+            pic.frames.push(Frame { width: b.width(), height: b.height(), pixels: Pixels::Rgba(b.as_raw().clone()), pos: (0, 0), delay_ms: Some(ms) });
         }
         pic.frames_per_dir = pic.frames.len();
         pic.fps = (pic.frames.len() as u32 * 1000 / total.max(1)).max(1);
@@ -75,14 +69,17 @@ pub fn decode(data: &[u8]) -> Result<Picture> {
         s.add("p.frames", nframes);
     }
     if flags != 0 {
-        s.raw("Features", format!(
-            "{}{}{}{}{}",
-            if flags & 0x20 != 0 { "ICC " } else { "" },
-            if flags & 0x10 != 0 { "Alpha " } else { "" },
-            if flags & 0x08 != 0 { "EXIF " } else { "" },
-            if flags & 0x04 != 0 { "XMP " } else { "" },
-            if flags & 0x02 != 0 { "Animation" } else { "" },
-        ));
+        s.raw(
+            "Features",
+            format!(
+                "{}{}{}{}{}",
+                if flags & 0x20 != 0 { "ICC " } else { "" },
+                if flags & 0x10 != 0 { "Alpha " } else { "" },
+                if flags & 0x08 != 0 { "EXIF " } else { "" },
+                if flags & 0x04 != 0 { "XMP " } else { "" },
+                if flags & 0x02 != 0 { "Animation" } else { "" },
+            ),
+        );
     }
     if let Some(e) = exif_section(data) {
         pic.sections.push(e);

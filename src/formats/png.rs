@@ -20,12 +20,11 @@ fn find(d: &[u8], pat: &[u8]) -> Option<usize> {
 
 pub fn decode(data: &[u8]) -> Result<Picture> {
     // APNG : un fragment « acTL » précède les données d'image.
-    if let (Some(a), Some(i)) = (find(data, b"acTL"), find(data, b"IDAT")) {
-        if a < i {
-            if let Ok(p) = decode_apng(data) {
-                return Ok(p);
-            }
-        }
+    if let (Some(a), Some(i)) = (find(data, b"acTL"), find(data, b"IDAT"))
+        && a < i
+        && let Ok(p) = decode_apng(data)
+    {
+        return Ok(p);
     }
     decode_static(data)
 }
@@ -98,10 +97,10 @@ fn decode_static(data: &[u8]) -> Result<Picture> {
     s.add("p.precision", info.bit_depth as u32);
     s.raw("Color type", color_name(info.color_type));
     s.add("p.interlaced", if info.interlaced { "p.yes" } else { "p.no" });
-    if let Some(d) = &info.pixel_dims {
-        if d.unit == pngc::Unit::Meter {
-            s.add("p.dpi", format!("{} × {}", dpi_from_ppm(d.xppu), dpi_from_ppm(d.yppu)));
-        }
+    if let Some(d) = &info.pixel_dims
+        && d.unit == pngc::Unit::Meter
+    {
+        s.add("p.dpi", format!("{} × {}", dpi_from_ppm(d.xppu), dpi_from_ppm(d.yppu)));
     }
     if let Some(a) = &info.animation_control {
         s.add("p.animated", "p.yes");
@@ -177,7 +176,7 @@ fn decode_apng(data: &[u8]) -> Result<Picture> {
     while decoded < total {
         let out = reader.next_frame(&mut buf).map_err(|e| anyhow!("PNG : {e}"))?;
         // Image par défaut qui ne fait pas partie de l'animation : ignorée.
-        let Some(fc) = reader.info().frame_control.clone() else { continue };
+        let Some(fc) = reader.info().frame_control else { continue };
         decoded += 1;
         // Disposition de l'image précédente.
         if let Some((pfc, snapshot)) = prev.take() {
@@ -204,12 +203,13 @@ fn decode_apng(data: &[u8]) -> Result<Picture> {
                 if cx >= w {
                     break;
                 }
-                let s = y * out.line_size + x * match out.color_type {
-                    pngc::ColorType::Grayscale => 1,
-                    pngc::ColorType::GrayscaleAlpha => 2,
-                    pngc::ColorType::Rgb => 3,
-                    _ => 4,
-                };
+                let s = y * out.line_size
+                    + x * match out.color_type {
+                        pngc::ColorType::Grayscale => 1,
+                        pngc::ColorType::GrayscaleAlpha => 2,
+                        pngc::ColorType::Rgb => 3,
+                        _ => 4,
+                    };
                 let px: [u8; 4] = match out.color_type {
                     pngc::ColorType::Grayscale => [buf[s], buf[s], buf[s], 255],
                     pngc::ColorType::GrayscaleAlpha => [buf[s], buf[s], buf[s], buf[s + 1]],

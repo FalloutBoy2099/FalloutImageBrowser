@@ -212,7 +212,14 @@ pub fn decode(data: &[u8]) -> Result<Picture> {
     pic.fps = ((n as u32 * 1000) / total.max(1)).max(1);
     pic.bpp = depth as u32;
     let s = pic.section("sec.format");
-    s.raw("Color mode", match depth { 32 => "RGBA", 16 => "Grayscale", _ => "Indexed" });
+    s.raw(
+        "Color mode",
+        match depth {
+            32 => "RGBA",
+            16 => "Grayscale",
+            _ => "Indexed",
+        },
+    );
     s.add("p.frames", n);
     s.add("p.layers", layers.iter().filter(|l| !l.group).count());
     s.add("p.duration", format!("{:.2} s", total as f64 / 1000.0));

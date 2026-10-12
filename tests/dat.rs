@@ -26,10 +26,7 @@ fn synthetic_dat2_and_dat1_roundtrip() {
     let big: Vec<u8> = (0..40000u32).map(|i| (i * 7 % 251) as u8).collect();
     let d2 = dat::write_dat2(&[(r"art\misc\a.frm", &frm, true), (r"art\misc\b.frm", &frm, false), ("readme.txt", b"hello", true)]);
     std::fs::write(dir.join("f2.dat"), d2).unwrap();
-    let d1 = dat::write_dat1(&[
-        (".", vec![("root.bin", big.clone(), true)]),
-        (r"ART\CRITTERS", vec![("hmwarr.frm", frm.clone(), true), ("plain.frm", frm.clone(), false)]),
-    ]);
+    let d1 = dat::write_dat1(&[(".", vec![("root.bin", big.clone(), true)]), (r"ART\CRITTERS", vec![("hmwarr.frm", frm.clone(), true), ("plain.frm", frm.clone(), false)])]);
     std::fs::write(dir.join("f1.dat"), d1).unwrap();
     for (name, kind) in [("f2.dat", dat::DatKind::Dat2), ("f1.dat", dat::DatKind::Dat1)] {
         let p = dir.join(name);
@@ -38,7 +35,13 @@ fn synthetic_dat2_and_dat1_roundtrip() {
         for i in 0..d.entries.len() {
             let b = d.read(i).unwrap();
             let e = &d.entries[i];
-            let want: &[u8] = if e.path.ends_with("frm") { &frm } else if e.path.ends_with("root.bin") { &big } else { b"hello" };
+            let want: &[u8] = if e.path.ends_with("frm") {
+                &frm
+            } else if e.path.ends_with("root.bin") {
+                &big
+            } else {
+                b"hello"
+            };
             assert_eq!(b, want, "{name}: {}", e.path);
         }
     }
@@ -181,7 +184,13 @@ fn cli_help_and_selection_options() {
 fn hostile_entry_names_stay_inside_output_folder() {
     let base = tmp("traversal");
     let frm = sample_frm();
-    let arc = dat::write_dat2(&[(r"..\..\evil1.frm", &frm, false), (r"C:\evil2.frm", &frm, false), (r"a\..\..\evil3.frm", &frm, false), (r"/abs/evil4.frm", &frm, false), (r"ok\fine.frm", &frm, false)]);
+    let arc = dat::write_dat2(&[
+        (r"..\..\evil1.frm", &frm, false),
+        (r"C:\evil2.frm", &frm, false),
+        (r"a\..\..\evil3.frm", &frm, false),
+        (r"/abs/evil4.frm", &frm, false),
+        (r"ok\fine.frm", &frm, false),
+    ]);
     std::fs::write(base.join("t.dat"), arc).unwrap();
     let out = base.join("deep").join("out");
     let args: Vec<String> = ["convert", base.join("t.dat").to_str().unwrap(), "-f", "bmp", "-o", out.to_str().unwrap()].iter().map(|s| s.to_string()).collect();
@@ -225,3 +234,76 @@ fn lying_entry_sizes_are_rejected() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+#[test]
+fn extract_file_folder_and_whole_archive() {
+    let base = tmp("extract");
+    let frm = sample_frm();
+    let arc = dat::write_dat2(&[(r"art\intrface\a.frm", &frm, true), (r"art\intrface\sub\b.frm", &frm, false), (r"art\misc\c.frm", &frm, true), ("readme.txt", b"hello", false)]);
+    let dat_path = base.join("master.dat");
+    std::fs::write(&dat_path, arc).unwrap();
+
+    // Un fichier.
+    let one = base.join("one");
+    let r = dat::extract(&dat_path.join("art").join("misc").join("c.frm"), &one, false).unwrap();
+    assert_eq!((r.written, r.skipped), (1, 0));
+    assert_eq!(std::fs::read(one.join("c.frm")).unwrap(), frm);
+
+    // Un dossier : l'arborescence est relative au dossier extrait.
+    let folder = base.join("folder");
+    let r = dat::extract(&dat_path.join("art").join("intrface"), &folder, false).unwrap();
+    assert_eq!((r.written, r.skipped), (2, 0));
+    assert_eq!(std::fs::read(folder.join("a.frm")).unwrap(), frm);
+    assert_eq!(std::fs::read(folder.join("sub").join("b.frm")).unwrap(), frm);
+
+    // Toute l'archive ; un second passage ne remplace rien, sauf avec `overwrite`.
+    let all = base.join("all");
+    assert_eq!(dat::extract(&dat_path, &all, false).unwrap().written, 4);
+    assert_eq!(std::fs::read(all.join("readme.txt")).unwrap(), b"hello");
+    std::fs::write(all.join("readme.txt"), b"mine").unwrap();
+    let again = dat::extract(&dat_path, &all, false).unwrap();
+    assert_eq!((again.written, again.skipped), (0, 4));
+    assert_eq!(std::fs::read(all.join("readme.txt")).unwrap(), b"mine");
+    assert_eq!(dat::extract(&dat_path, &all, true).unwrap().written, 4);
+    assert_eq!(std::fs::read(all.join("readme.txt")).unwrap(), b"hello");
+
+    // Chemin absent de l'archive.
+    assert!(dat::extract(&dat_path.join("nope"), &base.join("x"), false).is_err());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn cli_extract_subcommand() {
+    let base = tmp("cliextract");
+    let frm = sample_frm();
+    std::fs::write(base.join("pack.dat"), dat::write_dat2(&[(r"art\x\a.frm", &frm, true), (r"art\b.frm", &frm, false)])).unwrap();
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let out = base.join("out");
+    let dat_s = base.join("pack.dat");
+    assert_eq!(cli::run(&s(&["extract", dat_s.to_str().unwrap(), "-o", out.to_str().unwrap(), "-q"])), 0);
+    assert_eq!(std::fs::read(out.join("art").join("x").join("a.frm")).unwrap(), frm);
+    assert_eq!(std::fs::read(out.join("art").join("b.frm")).unwrap(), frm);
+    // Dossier de l'archive seulement.
+    let sub = base.join("sub");
+    assert_eq!(cli::run(&s(&["extract", base.join("pack.dat").join("art").join("x").to_str().unwrap(), "-o", sub.to_str().unwrap(), "-q"])), 0);
+    assert!(sub.join("a.frm").exists() && !sub.join("b.frm").exists());
+    // Erreurs d'usage : pas d'entrée, entrée hors archive, option inconnue.
+    assert_eq!(cli::run(&s(&["extract"])), 2);
+    assert_eq!(cli::run(&s(&["extract", base.to_str().unwrap()])), 2);
+    assert_eq!(cli::run(&s(&["extract", dat_s.to_str().unwrap(), "--bogus"])), 2);
+    assert!(cli::is_cli(&s(&["extract", "x"])));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Un nom d'entrée piégé ne peut pas faire sortir l'extraction de son dossier.
+#[test]
+fn hostile_names_do_not_escape_extraction() {
+    let base = tmp("extractevil");
+    let arc = dat::write_dat2(&[(r"..\..\evil.txt", b"x", false), (r"C:\evil2.txt", b"x", false), (r"ok\fine.txt", b"x", false)]);
+    std::fs::write(base.join("t.dat"), arc).unwrap();
+    let out = base.join("deep").join("out");
+    dat::extract(&base.join("t.dat"), &out, false).unwrap();
+    assert!(out.join("ok").join("fine.txt").exists());
+    assert!(!base.join("evil.txt").exists() && !base.join("deep").join("evil.txt").exists());
+    assert!(!Path::new(r"C:\evil2.txt").exists());
+    let _ = std::fs::remove_dir_all(&base);
+}

@@ -143,7 +143,12 @@ fn real_samples_convert_everywhere() {
         let Some((pic, _)) = load(s) else { continue };
         println!(
             "{s}: {}x{} dirs {} fpd {} frames {} colors {}",
-            pic.frames[0].width, pic.frames[0].height, pic.directions, pic.frames_per_dir, pic.frames.len(), pic.unique_colors
+            pic.frames[0].width,
+            pic.frames[0].height,
+            pic.directions,
+            pic.frames_per_dir,
+            pic.frames.len(),
+            pic.unique_colors
         );
         for (f, d, name) in modes() {
             let o = opts(f, d);
@@ -173,7 +178,9 @@ fn frm_identity() {
             let out = convert_to_bytes(&pic, &o, &Selection::default()).unwrap();
             let again = formats::decode(Format::Frm, &out, &ctx()).unwrap();
             let same = again.frames.len() == pic.frames.len()
-                && again.frames.iter().zip(&pic.frames).all(|(a, b)| a.width == b.width && a.height == b.height && a.pos == b.pos && matches!((&a.pixels, &b.pixels), (Pixels::Indexed(x), Pixels::Indexed(y)) if x == y));
+                && again.frames.iter().zip(&pic.frames).all(|(a, b)| {
+                    a.width == b.width && a.height == b.height && a.pos == b.pos && matches!((&a.pixels, &b.pixels), (Pixels::Indexed(x), Pixels::Indexed(y)) if x == y)
+                });
             if !same {
                 bad.push(e.display().to_string());
             }

@@ -61,15 +61,7 @@ pub fn decode(data: &[u8]) -> Result<Picture> {
     let total = rots * fcount;
     let mut hdrs = Vec::with_capacity(total);
     for _ in 0..total {
-        hdrs.push(Hdr {
-            w: r.u32le()? as usize,
-            h: r.u32le()? as usize,
-            size: r.u32le()? as usize,
-            cx: r.i32le()?,
-            cy: r.i32le()?,
-            dx: r.i32le()?,
-            dy: r.i32le()?,
-        });
+        hdrs.push(Hdr { w: r.u32le()? as usize, h: r.u32le()? as usize, size: r.u32le()? as usize, cx: r.i32le()?, cy: r.i32le()?, dx: r.i32le()?, dy: r.i32le()? });
     }
     let mut pic = Picture::new(Format::Art);
     pic.directions = rots;
@@ -108,13 +100,7 @@ pub fn decode(data: &[u8]) -> Result<Picture> {
         // Les lignes sont stockées de haut en bas (constaté sur de vrais fichiers).
         let top = px;
         let (w1, h1, top) = if n == 0 { (1, 1, vec![0u8]) } else { (h.w, h.h, top) };
-        pic.frames.push(Frame {
-            width: w1 as u32,
-            height: h1 as u32,
-            pixels: Pixels::Indexed(top),
-            pos: (-h.cx, -h.cy),
-            delay_ms: Some(delay),
-        });
+        pic.frames.push(Frame { width: w1 as u32, height: h1 as u32, pixels: Pixels::Indexed(top), pos: (-h.cx, -h.cy), delay_ms: Some(delay) });
     }
     let s = pic.section("sec.format");
     s.raw("Flags", format!("{flags:#010X}{}", if flags & STATIC != 0 { " (static)" } else { "" }));
@@ -126,10 +112,7 @@ pub fn decode(data: &[u8]) -> Result<Picture> {
     s.raw("Palette IDs", format!("{:?}", pal_ids));
     let s = pic.section("sec.frames");
     for (i, h) in hdrs.iter().take(64).enumerate() {
-        s.raw(
-            &format!("#{i}"),
-            format!("{}×{}  center ({}, {})  delta ({}, {})  {} B", h.w, h.h, h.cx, h.cy, h.dx, h.dy, h.size),
-        );
+        s.raw(&format!("#{i}"), format!("{}×{}  center ({}, {})  delta ({}, {})  {} B", h.w, h.h, h.cx, h.cy, h.dx, h.dy, h.size));
     }
     Ok(pic)
 }

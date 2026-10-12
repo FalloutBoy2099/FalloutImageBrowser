@@ -88,7 +88,7 @@ pub fn decode(data: &[u8]) -> Result<Picture> {
     // Échantillons (n × depth) en entiers.
     let mut samples = vec![0usize; n * depth];
     match kind {
-        1 | 2 | 3 => {
+        1..=3 => {
             for s in samples.iter_mut() {
                 let word = if kind == 1 {
                     // PBM ASCII : les chiffres peuvent être collés.
@@ -149,7 +149,18 @@ pub fn decode(data: &[u8]) -> Result<Picture> {
         pic.bpp = 1;
     }
     let s = pic.section("sec.format");
-    s.raw("Type", format!("P{kind}{}", match kind { 1 | 4 => " (PBM)", 2 | 5 => " (PGM)", 3 | 6 => " (PPM)", _ => " (PAM)" }));
+    s.raw(
+        "Type",
+        format!(
+            "P{kind}{}",
+            match kind {
+                1 | 4 => " (PBM)",
+                2 | 5 => " (PGM)",
+                3 | 6 => " (PPM)",
+                _ => " (PAM)",
+            }
+        ),
+    );
     s.add("p.compression", if matches!(kind, 1..=3) { "ASCII" } else { "p.none" });
     s.raw("Maxval", maxval);
     if !tupl.is_empty() {

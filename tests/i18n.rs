@@ -34,7 +34,8 @@ fn keys_used_in_sources_exist() {
                     }
                     let lit = &s[start..j.min(s.len())];
                     let ok = ["p.", "c.", "m.", "t.", "s.", "a.", "sec.", "about."].iter().any(|pre| lit.starts_with(pre))
-                        && !lit.ends_with('.') && lit.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_');
+                        && !lit.ends_with('.')
+                        && lit.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_');
                     if ok {
                         used.insert(lit.to_string());
                     }

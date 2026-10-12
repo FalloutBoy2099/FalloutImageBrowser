@@ -88,19 +88,8 @@ pub struct ConvertUi {
 
 impl ConvertUi {
     pub fn new(s: &ConvSettings) -> ConvertUi {
-        let custom = s.pal_path.as_ref().and_then(|p| {
-            load_pal_file(p).ok().map(|pal| (Arc::new(pal), p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()))
-        });
-        ConvertUi {
-            open: false,
-            s: s.clone(),
-            custom,
-            name: String::new(),
-            source: None,
-            running: false,
-            outcome: Arc::new(Mutex::new(None)),
-            error: None,
-        }
+        let custom = s.pal_path.as_ref().and_then(|p| load_pal_file(p).ok().map(|pal| (Arc::new(pal), p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())));
+        ConvertUi { open: false, s: s.clone(), custom, name: String::new(), source: None, running: false, outcome: Arc::new(Mutex::new(None)), error: None }
     }
 
     pub fn to_settings(&self) -> ConvSettings {
@@ -136,10 +125,10 @@ impl ConvertUi {
     }
 
     fn fix_depth(&mut self) {
-        if !self.supported(self.s.depth) {
-            if let Some(k) = DepthKind::ALL.iter().copied().find(|k| self.supported(*k)) {
-                self.s.depth = k;
-            }
+        if !self.supported(self.s.depth)
+            && let Some(k) = DepthKind::ALL.iter().copied().find(|k| self.supported(*k))
+        {
+            self.s.depth = k;
         }
     }
 
@@ -170,13 +159,7 @@ impl App {
         };
         let (Some((loaded, sel)), Some(out_dir)) = (self.conv.source.clone(), self.conv.effective_out_dir()) else { return };
         let job = Job {
-            opts: ConvertOptions {
-                format: self.conv.format(),
-                depth,
-                dither: self.conv.s.dither,
-                bg: self.conv.s.bg,
-                enc: EncodeOpts { jpeg_quality: self.conv.s.jpeg_quality },
-            },
+            opts: ConvertOptions { format: self.conv.format(), depth, dither: self.conv.s.dither, bg: self.conv.s.bg, enc: EncodeOpts { jpeg_quality: self.conv.s.jpeg_quality } },
             seq: self.conv.s.sequence,
             policy: self.policy.clone(),
         };
@@ -213,13 +196,13 @@ impl App {
                 self.conv.open = false;
                 self.toast(trf("c.done", &[("file", what)]));
                 // Rafraîchir la liste si on a écrit dans le dossier courant.
-                if let (Some(dir), Some(cur)) = (self.tree.selected_dir.clone(), out_dir) {
-                    if dir == cur {
-                        self.tree.reload_dir(&dir);
-                        self.files = self.tree.files_of(&dir);
-                        if let Some(w) = &self.wanted {
-                            self.index = self.files.iter().position(|f| f == w);
-                        }
+                if let (Some(dir), Some(cur)) = (self.tree.selected_dir.clone(), out_dir)
+                    && dir == cur
+                {
+                    self.tree.reload_dir(&dir);
+                    self.files = self.tree.files_of(&dir);
+                    if let Some(w) = &self.wanted {
+                        self.index = self.files.iter().position(|f| f == w);
                     }
                 }
             }
@@ -234,11 +217,14 @@ impl App {
         }
         let mut start = false;
         let mut close = false;
-        let modal = egui::Modal::new(egui::Id::new("convert_modal")).show(ctx, |ui| {
-            ui.set_width(470.0);
-            ui.heading(tr("c.title"));
+        let modal = egui::Modal::new(egui::Id::new("convert_modal")).frame(crate::dialog::frame(ctx)).show(ctx, |ui| {
+            ui.set_width(500.0);
+            crate::dialog::setup(ui);
+            if crate::dialog::title(ui, &tr("c.title")) && !self.conv.running {
+                close = true;
+            }
             if let Some((l, _)) = &self.conv.source {
-                ui.label(egui::RichText::new(l.path.display().to_string()).weak().small());
+                ui.label(egui::RichText::new(l.path.display().to_string()).weak());
             }
             ui.add_space(6.0);
             let running = self.conv.running;
@@ -271,8 +257,9 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.checkbox(&mut self.conv.s.create_pal, tr("c.pal_create"));
                             ui.add_enabled_ui(!self.conv.s.create_pal, |ui| {
-                            if ui.button(tr("c.browse")).clicked() {
-                                if let Some(p) = rfd::FileDialog::new().add_filter("PAL", &["pal", "PAL"]).pick_file() {
+                                if ui.button(tr("c.browse")).clicked()
+                                    && let Some(p) = rfd::FileDialog::new().add_filter("PAL", &["pal", "PAL"]).pick_file()
+                                {
                                     match load_pal_file(&p) {
                                         Ok(pal) => {
                                             let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -282,11 +269,10 @@ impl App {
                                         Err(e) => self.conv.error = Some(e),
                                     }
                                 }
-                            }
-                            match &self.conv.custom {
-                                Some((_, n)) => ui.label(n.clone()),
-                                None => ui.label(egui::RichText::new(tr("c.none")).weak()),
-                            };
+                                match &self.conv.custom {
+                                    Some((_, n)) => ui.label(n.clone()),
+                                    None => ui.label(egui::RichText::new(tr("c.none")).weak()),
+                                };
                             });
                         });
                         ui.end_row();
@@ -304,7 +290,7 @@ impl App {
                     ui.label(tr("c.bg"));
                     ui.horizontal(|ui| {
                         ui.color_edit_button_srgb(&mut self.conv.s.bg);
-                        ui.label(egui::RichText::new(tr("c.bg_hint")).weak().small());
+                        ui.label(egui::RichText::new(tr("c.bg_hint")).weak());
                     });
                     ui.end_row();
                     let multi = self.conv.source.as_ref().is_some_and(|(l, _)| l.pic.frames.len() > 1);
@@ -343,7 +329,7 @@ impl App {
                             }
                         });
                         if let Some(p) = self.conv.effective_out_dir() {
-                            ui.label(egui::RichText::new(p.display().to_string()).small());
+                            ui.label(egui::RichText::new(p.display().to_string()));
                         }
                     });
                     ui.end_row();
@@ -356,10 +342,10 @@ impl App {
             ui.separator();
             ui.horizontal(|ui| {
                 let can = !self.conv.running && self.conv.effective_out_dir().is_some() && !self.conv.name.trim().is_empty();
-                if ui.add_enabled(can, egui::Button::new(tr("c.start"))).clicked() {
+                if crate::dialog::button_enabled(ui, can, tr("c.start")).clicked() {
                     start = true;
                 }
-                if ui.add_enabled(!self.conv.running, egui::Button::new(tr("c.cancel"))).clicked() {
+                if crate::dialog::button_enabled(ui, !self.conv.running, tr("c.cancel")).clicked() {
                     close = true;
                 }
                 if self.conv.running {

@@ -3,15 +3,18 @@
 //! ailleurs que dans `Software\Classes`.
 
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
-use windows::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW, RegGetValueW, RegOpenKeyExW, RegQueryInfoKeyW, RegSetValueExW};
+use windows::Win32::System::Registry::{
+    HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW, RegGetValueW,
+    RegOpenKeyExW, RegQueryInfoKeyW, RegSetValueExW,
+};
 use windows::core::PCWSTR;
 
 /// Identifiant de la classe du fournisseur de vignettes.
 pub const CLSID: &str = "{7A3C9D52-4E1B-4F6A-9C2D-5B8E0F1A6D37}";
 /// Identifiant d'interface qui désigne un fournisseur de vignettes dans `ShellEx`.
 pub const THUMBNAIL_HANDLER: &str = "{E357FCCD-A995-4576-B01F-234630154E96}";
-/// Extensions prises en charge.
-pub const EXTENSIONS: [&str; 2] = ["frm", "rix"];
+/// Extensions prises en charge : Fallout (FRM, RIX), Arcanum (ART) et Fallout Tactics (ZAR, TIL, SPR).
+pub const EXTENSIONS: [&str; 6] = ["frm", "rix", "art", "zar", "til", "spr"];
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()

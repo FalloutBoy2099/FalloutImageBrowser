@@ -101,10 +101,11 @@ fn read_block(d: &[u8], p: usize, len: usize) -> Option<(Vec<u8>, usize)> {
 
 fn find_first_block(d: &[u8], from: usize, len: usize) -> Option<(Vec<u8>, usize)> {
     for p in from..d.len().saturating_sub(16) {
-        if d[p] <= 1 && (d[p] == 1 || d.get(p + 13..p + 15) == Some(&[0x1F, 0x8B])) {
-            if let Some(r) = read_block(d, p, len) {
-                return Some(r);
-            }
+        if d[p] <= 1
+            && (d[p] == 1 || d.get(p + 13..p + 15) == Some(&[0x1F, 0x8B]))
+            && let Some(r) = read_block(d, p, len)
+        {
+            return Some(r);
         }
     }
     None

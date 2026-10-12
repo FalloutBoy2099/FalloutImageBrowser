@@ -93,14 +93,7 @@ fn scan_markers(d: &[u8]) -> Info {
                     2 => "dpcm",
                     _ => "",
                 };
-                info.jfif = Some(format!(
-                    "{}.{:02}  {}×{} {}",
-                    seg[5],
-                    seg[6],
-                    u16::from_be_bytes([seg[8], seg[9]]),
-                    u16::from_be_bytes([seg[10], seg[11]]),
-                    units
-                ));
+                info.jfif = Some(format!("{}.{:02}  {}×{} {}", seg[5], seg[6], u16::from_be_bytes([seg[8], seg[9]]), u16::from_be_bytes([seg[10], seg[11]]), units));
             }
             0xEE if seg.starts_with(b"Adobe") && seg.len() >= 12 => info.adobe = Some(seg[11]),
             0xFE => info.comment = Some(String::from_utf8_lossy(seg).trim().to_string()),

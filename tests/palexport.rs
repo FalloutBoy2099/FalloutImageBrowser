@@ -53,7 +53,7 @@ fn every_format_from_indexed_and_truecolor() {
         let n = u16::from_le_bytes([b[22], b[23]]) as usize;
         assert_eq!(u32le(&b, 16) as usize, 4 + 4 * n);
         assert_eq!(b.len(), 24 + 4 * n);
-        assert!(n >= 2 && n <= 256);
+        assert!((2..=256).contains(&n));
         // ACT
         let b = encode(PalFormat::Act, &pic, "t").unwrap();
         assert!(b.len() == 768 || b.len() == 772);
@@ -110,7 +110,7 @@ fn cli_palette_subcommand() {
     }
     assert!(dir.join("HMJMPSAA.kpl").exists() && dir.join("HMJMPSAA.hex").exists() && dir.join("HMJMPSAA.act").exists());
     assert_eq!(cli::run(&s(&["palette", src, "-f", "nope"])), 2);
-    assert_eq!(std::fs::read(dir.join("HMJMPSAA.act")).map(|b| b.len() >= 768).unwrap(), true);
+    assert!(std::fs::read(dir.join("HMJMPSAA.act")).map(|b| b.len() >= 768).unwrap());
     // Dossier de test conservé pour inspection manuelle du .kpl.
     println!("{}", dir.display());
 }
@@ -131,12 +131,18 @@ fn palette_files_are_readable_as_swatches() {
             assert!(colors.count_used() >= 2, "{}", f.label());
             // Aperçu RVBA en cases de 24 px, 16 colonnes.
             assert_eq!(sw.frames[0].width, 16 * 24);
-            assert!(sw.frames[0].height % 24 == 0);
+            assert!(sw.frames[0].height.is_multiple_of(24));
             // Les couleurs lues sont celles de la palette extraite (RVB). Formats « à indices » (PAL Fallout, ACT) : mêmes
             // indices ; autres formats : liste séquentielle des couleurs non transparentes.
             let tol = if f == PalFormat::FalloutPal { 3 } else { 1 };
-            let seq_src: Vec<[u8; 3]> = (0..256).filter(|&i| src.palette.used[i] && src.palette.colors[i][3] > 0).map(|i| [src.palette.colors[i][0], src.palette.colors[i][1], src.palette.colors[i][2]]).collect();
-            let seq_read: Vec<[u8; 3]> = (0..256).filter(|&i| colors.used[i] && colors.colors[i][3] > 0 || (f == PalFormat::FalloutPal && i == 0 && colors.used[0])).map(|i| [colors.colors[i][0], colors.colors[i][1], colors.colors[i][2]]).collect();
+            let seq_src: Vec<[u8; 3]> = (0..256)
+                .filter(|&i| src.palette.used[i] && src.palette.colors[i][3] > 0)
+                .map(|i| [src.palette.colors[i][0], src.palette.colors[i][1], src.palette.colors[i][2]])
+                .collect();
+            let seq_read: Vec<[u8; 3]> = (0..256)
+                .filter(|&i| colors.used[i] && colors.colors[i][3] > 0 || (f == PalFormat::FalloutPal && i == 0 && colors.used[0]))
+                .map(|i| [colors.colors[i][0], colors.colors[i][1], colors.colors[i][2]])
+                .collect();
             if matches!(f, PalFormat::FalloutPal | PalFormat::Act) {
                 let mut checked = 0;
                 for i in 1..256 {
@@ -176,4 +182,3 @@ fn jasc_and_hex_and_act_text_palettes() {
     assert_eq!(&p.colors.as_ref().unwrap().colors[3][..3], &[255, 255, 0]);
     assert_eq!(formats::sniff(jasc), Some(Format::Palette));
 }
-

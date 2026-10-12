@@ -496,3 +496,40 @@ pub fn write_dat1(dirs: &[(&str, Vec<(&str, Vec<u8>, bool)>)]) -> Vec<u8> {
     idx.extend_from_slice(&data);
     idx
 }
+
+/// Résultat d'une extraction.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Extracted {
+    /// Fichiers écrits.
+    pub written: usize,
+    /// Fichiers déjà présents, laissés tels quels (sauf `overwrite`).
+    pub skipped: usize,
+}
+
+/// Extrait un fichier, un dossier (récursivement) ou toute une archive vers `out_dir`, en conservant l'arborescence
+/// relative au dossier extrait. Un fichier existant n'est remplacé que si `overwrite` est vrai.
+pub fn extract(path: &Path, out_dir: &Path, overwrite: bool) -> Result<Extracted> {
+    let items: Vec<(PathBuf, PathBuf)> = match stat(path) {
+        Some(Stat::File) => vec![(path.to_path_buf(), PathBuf::from(path.file_name().ok_or_else(|| anyhow!("nom de fichier invalide"))?))],
+        Some(Stat::Dir) => walk(path),
+        None => bail!("{} : introuvable dans l'archive", path.display()),
+    };
+    let mut report = Extracted::default();
+    for (full, rel) in items {
+        // Les noms d'entrée sont déjà nettoyés (voir `norm`) ; on vérifie quand même que rien ne sort du dossier de sortie.
+        if rel.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+            bail!("chemin d'entrée refusé : {}", rel.display());
+        }
+        let dest = out_dir.join(&rel);
+        if dest.exists() && !overwrite {
+            report.skipped += 1;
+            continue;
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| anyhow!("{} : {e}", parent.display()))?;
+        }
+        std::fs::write(&dest, read_any(&full)?).map_err(|e| anyhow!("{} : {e}", dest.display()))?;
+        report.written += 1;
+    }
+    Ok(report)
+}

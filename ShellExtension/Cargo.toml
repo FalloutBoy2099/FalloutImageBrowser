@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Windows Explorer thumbnail provider for Fallout .FRM and .RIX files (uses the decoders of Fallout Image Browser)"
 publish = false
+license = "MIT"
 
 [lib]
 name = "fallout_thumbnails"

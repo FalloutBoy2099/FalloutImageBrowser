@@ -194,7 +194,16 @@ pub fn decode(data: &[u8]) -> Result<Picture> {
         let lum = pf_flags & 0x20000 != 0;
         let alpha_only = pf_flags & 0x2 != 0 && pf_flags & 0x41 == 0;
         let has_alpha = pf_flags & 0x1 != 0 && am != 0;
-        label = format!("{bits}-bit {}", if lum { "luminance" } else if alpha_only { "alpha" } else { "RGB" });
+        label = format!(
+            "{bits}-bit {}",
+            if lum {
+                "luminance"
+            } else if alpha_only {
+                "alpha"
+            } else {
+                "RGB"
+            }
+        );
         let mut out = vec![255u8; w * h * 4];
         for i in 0..w * h {
             let mut v = 0u32;
@@ -221,7 +230,13 @@ pub fn decode(data: &[u8]) -> Result<Picture> {
         out
     };
     let mut pic = Picture::single(Format::Dds, w as u32, h as u32, Pixels::Rgba(rgba), None);
-    pic.bpp = if bc == Some(Bc::Bc1) || bc == Some(Bc::Bc4) { 4 } else if bc.is_some() { 8 } else { bits.max(8) as u32 };
+    pic.bpp = if bc == Some(Bc::Bc1) || bc == Some(Bc::Bc4) {
+        4
+    } else if bc.is_some() {
+        8
+    } else {
+        bits.max(8) as u32
+    };
     let s = pic.section("sec.format");
     s.add("p.compression", label);
     s.raw("Mipmaps", mips.max(1));

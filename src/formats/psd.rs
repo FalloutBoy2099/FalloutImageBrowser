@@ -33,11 +33,7 @@ fn lab_to_rgb(l: f32, a: f32, b: f32) -> [u8; 3] {
     let (fx, fz) = (fy + a / 500.0, fy - b / 200.0);
     let inv = |t: f32| if t > 6.0 / 29.0 { t * t * t } else { 3.0 * (6.0f32 / 29.0).powi(2) * (t - 4.0 / 29.0) };
     let (x, y, z) = (0.9642 * inv(fx), inv(fy), 0.8249 * inv(fz));
-    [
-        srgb(3.1338561 * x - 1.6168667 * y - 0.4906146 * z),
-        srgb(-0.9787684 * x + 1.9161415 * y + 0.0334540 * z),
-        srgb(0.0719453 * x - 0.2289914 * y + 1.4052427 * z),
-    ]
+    [srgb(3.133_856 * x - 1.6168667 * y - 0.4906146 * z), srgb(-0.9787684 * x + 1.9161415 * y + 0.0334540 * z), srgb(0.0719453 * x - 0.2289914 * y + 1.4052427 * z)]
 }
 
 /// Ressources d'image : (résolution horizontale en ppp, index transparent).
@@ -94,12 +90,12 @@ pub fn decode(data: &[u8]) -> Result<Picture> {
     {
         let mut lr = Rd::new(lm);
         let info_len = if version == 2 { u64be(&mut lr).unwrap_or(0) } else { lr.u32be().unwrap_or(0) as u64 };
-        if info_len > 0 {
-            if let Ok(c) = lr.u16be() {
-                let c = c as i16 as i32;
-                layers = c.abs();
-                merged_alpha = c < 0;
-            }
+        if info_len > 0
+            && let Ok(c) = lr.u16be()
+        {
+            let c = c as i16 as i32;
+            layers = c.abs();
+            merged_alpha = c < 0;
         }
     }
     let (dpi, transp_index) = resources(res);
@@ -207,10 +203,10 @@ pub fn decode(data: &[u8]) -> Result<Picture> {
             pal.colors[i] = [cmode[i], cmode[256 + i], cmode[512 + i], 255];
             pal.used[i] = true;
         }
-        if let Some(t) = transp_index {
-            if t < 256 {
-                pal.colors[t as usize][3] = 0;
-            }
+        if let Some(t) = transp_index
+            && t < 256
+        {
+            pal.colors[t as usize][3] = 0;
         }
         let mut idx = vec![0u8; w * h];
         for y in 0..h {

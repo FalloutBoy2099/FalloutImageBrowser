@@ -2,8 +2,8 @@
 
 use crate::convert::*;
 use crate::formats;
-use crate::model::Picture;
 use crate::loader::{Loaded, PalPolicy, load_file};
+use crate::model::Picture;
 use std::path::{Path, PathBuf};
 
 pub struct Job {
@@ -48,13 +48,7 @@ pub fn stem_of(path: &Path) -> String {
 }
 
 /// Convertit une image déjà chargée. `name` remplace le nom (sans extension) du fichier d'origine.
-pub fn convert_loaded(
-    loaded: &Loaded,
-    sel: &Selection,
-    job: &Job,
-    out_dir: &Path,
-    name: Option<&str>,
-) -> Result<Vec<PathBuf>, String> {
+pub fn convert_loaded(loaded: &Loaded, sel: &Selection, job: &Job, out_dir: &Path, name: Option<&str>) -> Result<Vec<PathBuf>, String> {
     let pic = &loaded.pic;
     let fmt = job.opts.format;
     let caps = formats::caps(fmt);

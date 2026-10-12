@@ -26,24 +26,8 @@ pub enum Lang {
 }
 
 impl Lang {
-    pub const ALL: [Lang; 16] = [
-        Lang::Fr,
-        Lang::En,
-        Lang::Es,
-        Lang::It,
-        Lang::Pt,
-        Lang::Pl,
-        Lang::Da,
-        Lang::Fi,
-        Lang::El,
-        Lang::Hu,
-        Lang::Nl,
-        Lang::Ro,
-        Lang::Sv,
-        Lang::Cs,
-        Lang::Zh,
-        Lang::Ru,
-    ];
+    pub const ALL: [Lang; 16] =
+        [Lang::Fr, Lang::En, Lang::Es, Lang::It, Lang::Pt, Lang::Pl, Lang::Da, Lang::Fi, Lang::El, Lang::Hu, Lang::Nl, Lang::Ro, Lang::Sv, Lang::Cs, Lang::Zh, Lang::Ru];
 
     pub fn code(self) -> &'static str {
         match self {

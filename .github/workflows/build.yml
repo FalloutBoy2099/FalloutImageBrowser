@@ -1,12 +1,15 @@
 name: Build
 
-# Builds the release binaries for Windows, Linux and macOS (x64 and arm64) on GitHub's own runners, runs the tests on
-# one runner per OS, and packs every binary into fallout_image_browser-<version>-<os>-<arch>.zip (the same names as
-# publish.ps1 / publish.sh).
+# Checks the code, builds the release binaries for Windows, Linux and macOS (x64 and arm64) on GitHub's own runners, runs
+# the tests on one runner per OS, and packs everything into zips named like those of publish.ps1 / publish.sh:
 #
-#   * push / pull request : build + tests, the zips are kept as workflow artifacts
+#   fallout_image_browser-<version>-<os>-<arch>.zip              the application
+#   fallout_image_browser-thumbnails-<version>-windows-<arch>.zip   the Explorer thumbnail provider (ShellExtension/)
+#
+#   * push / pull request : checks + build + tests, the zips are kept as workflow artifacts
 #   * push of a tag v*    : the zips are also attached to a GitHub release (the tag must match the version in Cargo.toml)
 #   * manual run          : Actions tab -> Build -> Run workflow
+# Dependency advisories are checked by audit.yml.
 
 on:
   push:
@@ -29,8 +32,39 @@ env:
   MACOSX_DEPLOYMENT_TARGET: '11.0'
 
 jobs:
+  # Formatting and clippy (warnings are errors) on Linux and Windows, so the code specific to each OS is linted too.
+  lint:
+    name: lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: lint-${{ matrix.os }}
+          workspaces: |
+            .
+            ShellExtension
+      - name: Formatting
+        run: |
+          cargo fmt --check
+          cargo fmt --check --manifest-path ShellExtension/Cargo.toml
+      - name: Clippy (application)
+        run: cargo clippy --release --locked --all-targets -- -D warnings
+      - name: Clippy (Explorer extension)
+        if: runner.os == 'Windows'
+        run: cargo clippy --release --locked --all-targets --manifest-path ShellExtension/Cargo.toml -- -D warnings
+
   build:
     name: ${{ matrix.key }}
+    needs: lint
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -69,7 +103,6 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package
-        id: package
         shell: bash
         run: |
           set -euo pipefail
@@ -84,8 +117,7 @@ jobs:
           mkdir -p "stage/${root}" dist
           cp "target/${{ matrix.target }}/release/${name}${exe}" "stage/${root}/"
           chmod 755 "stage/${root}/${name}${exe}"
-          cp README.md "stage/${root}/"
-          for f in LICENSE LICENSE.md LICENSE.txt; do if [ -f "$f" ]; then cp "$f" "stage/${root}/"; fi; done
+          cp README.md LICENSE "stage/${root}/"
 
           if [ "${{ runner.os }}" = "Windows" ]; then
             (cd stage && 7z a -tzip -mx=9 "../dist/${root}.zip" "${root}" > /dev/null)
@@ -94,7 +126,6 @@ jobs:
             (cd stage && zip -qrX "../dist/${root}.zip" "${root}")
           fi
           ls -l dist
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Upload package
         uses: actions/upload-artifact@v4
@@ -103,10 +134,62 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
+  # The Explorer thumbnail provider (ShellExtension/) for 64-bit Intel and ARM Windows.
+  shell-extension:
+    name: explorer-thumbnails-${{ matrix.key }}
+    needs: lint
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { key: windows-x64,   target: x86_64-pc-windows-msvc,  test: true }
+          - { key: windows-arm64, target: aarch64-pc-windows-msvc, test: false }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.key }}
+          workspaces: ShellExtension
+
+      - name: Tests
+        if: matrix.test
+        working-directory: ShellExtension
+        run: cargo test --release --locked --target ${{ matrix.target }}
+
+      - name: Build
+        working-directory: ShellExtension
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          value() { awk -v key="$1" '/^\[/ { p = ($0 == "[package]") } p && $1 == key && $2 == "=" { gsub(/"/, "", $3); print $3; exit }' Cargo.toml; }
+          name="$(value name)"
+          version="$(value version)"
+          root="${name}-thumbnails-${version}-${{ matrix.key }}"
+          mkdir -p "stage/${root}" dist
+          cp ShellExtension/target/${{ matrix.target }}/release/fallout_thumbnails.dll "stage/${root}/"
+          cp ShellExtension/install.ps1 ShellExtension/uninstall.ps1 ShellExtension/README.md LICENSE "stage/${root}/"
+          (cd stage && 7z a -tzip -mx=9 "../dist/${root}.zip" "${root}" > /dev/null)
+          ls -l dist
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: thumbnails-${{ matrix.key }}
+          path: dist/*.zip
+          if-no-files-found: error
+
   release:
     name: GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, shell-extension]
     runs-on: ubuntu-latest
     permissions:
       contents: write

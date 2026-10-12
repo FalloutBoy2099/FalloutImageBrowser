@@ -3,9 +3,9 @@
 use super::*;
 use ::tiff as tiffc;
 use std::io::Cursor;
+use tiffc::ColorType;
 use tiffc::decoder::{Decoder, DecodingResult, Limits};
 use tiffc::tags::Tag;
-use tiffc::ColorType;
 
 fn to_u8(r: DecodingResult) -> Result<(Vec<u8>, bool)> {
     Ok(match r {

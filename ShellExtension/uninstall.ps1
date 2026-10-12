@@ -21,6 +21,12 @@ $p = Start-Process regsvr32.exe -ArgumentList '/s', '/u', "`"$target`"" -Wait -P
 if ($p.ExitCode -ne 0) { throw "regsvr32 /u failed (exit code $($p.ExitCode))" }
 Write-Host 'Unregistered.' -ForegroundColor Green
 
+# Close the Explorer thumbnail hosts that still have the DLL loaded (Windows starts new ones on demand).
+Get-Process dllhost -ErrorAction SilentlyContinue |
+    Where-Object { try { $_.Modules.ModuleName -contains 'fallout_thumbnails.dll' } catch { $false } } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 500
+
 if ($RemoveFiles) {
     for ($i = 1; ; $i++) {
         try { Remove-Item $target -Force; break }

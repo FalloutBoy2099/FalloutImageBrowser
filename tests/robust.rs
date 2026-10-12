@@ -4,8 +4,8 @@ use fallout_image_browser::convert::*;
 use fallout_image_browser::formats::{self, DecodeCtx};
 use fallout_image_browser::model::*;
 use fallout_image_browser::palette;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -144,7 +144,11 @@ fn seeds() -> Vec<(Format, String, Vec<u8>)> {
     let mut v = Vec::new();
     for f in Format::ALL {
         let caps = formats::caps(f);
-        let depths: Vec<DepthChoice> = [(caps.d32, DepthChoice::Rgba32), (caps.d24, DepthChoice::Rgb24), (caps.indexed, DepthChoice::Indexed(PalChoice::Fallout))].into_iter().filter(|(ok, _)| *ok).map(|(_, d)| d).collect();
+        let depths: Vec<DepthChoice> = [(caps.d32, DepthChoice::Rgba32), (caps.d24, DepthChoice::Rgb24), (caps.indexed, DepthChoice::Indexed(PalChoice::Fallout))]
+            .into_iter()
+            .filter(|(ok, _)| *ok)
+            .map(|(_, d)| d)
+            .collect();
         for depth in depths {
             let o = ConvertOptions { format: f, depth, dither: false, bg: [0; 3], enc: Default::default() };
             if let Ok(b) = convert_to_bytes(&pic, &o, &Selection::default()) {
@@ -159,10 +163,10 @@ fn seeds() -> Vec<(Format, String, Vec<u8>)> {
     walk(&root, &["frm", "rix", "art", "psd", "png", "zar", "spr", "til"], &mut files, usize::MAX);
     assert!(!files.is_empty(), "_test_files introuvable");
     for p in files {
-        if std::fs::metadata(&p).map(|m| m.len() < 3_000_000).unwrap_or(false) {
-            if let Some(f) = Format::from_path(&p) {
-                real.push((f, p));
-            }
+        if std::fs::metadata(&p).map(|m| m.len() < 3_000_000).unwrap_or(false)
+            && let Some(f) = Format::from_path(&p)
+        {
+            real.push((f, p));
         }
     }
     for (f, p) in real {
@@ -196,9 +200,8 @@ fn decoders_survive_corrupted_files() {
             if dt > slowest.0 {
                 slowest = (dt, format!("{name} (mutation {k})"));
             }
-            match r {
-                Err(_) => problems.push(format!("PANIC  {name} mutation {k} ({} octets)", m.len())),
-                Ok(Ok(_)) | Ok(Err(_)) => {}
+            if r.is_err() {
+                problems.push(format!("PANIC  {name} mutation {k} ({} octets)", m.len()))
             }
             if dt > Duration::from_secs(10) {
                 problems.push(format!("LENT   {name} mutation {k} : {dt:?}"));

@@ -16,8 +16,7 @@ pub enum PalFormat {
 }
 
 impl PalFormat {
-    pub const ALL: [PalFormat; 6] =
-        [PalFormat::FalloutPal, PalFormat::RiffPal, PalFormat::Act, PalFormat::Gpl, PalFormat::Kpl, PalFormat::Hex];
+    pub const ALL: [PalFormat; 6] = [PalFormat::FalloutPal, PalFormat::RiffPal, PalFormat::Act, PalFormat::Gpl, PalFormat::Kpl, PalFormat::Hex];
 
     pub fn ext(self) -> &'static str {
         match self {
@@ -251,4 +250,3 @@ fn kpl(colors: &[(usize, [u8; 3])], name: &str, indexed: bool) -> Vec<u8> {
     let profiles = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Profiles>\n <Profile name=\"sRGB-elle-V2-srgbtrc.icc\" filename=\"sRGB-elle-V2-srgbtrc.icc\" colorModelId=\"RGBA\" colorDepthId=\"U8\"/>\n</Profiles>\n";
     zip_store(&[("mimetype", b"application/x-krita-palette"), ("colorset.xml", x.as_bytes()), ("profiles.xml", profiles.as_bytes())])
 }
-

@@ -89,11 +89,7 @@ fn to_555(rgba: &mut [u8], keep_alpha: bool) {
         for c in 0..3 {
             p[c] = (p[c] & 0xF8) | (p[c] >> 5);
         }
-        p[3] = if keep_alpha {
-            if p[3] >= 128 { 255 } else { 0 }
-        } else {
-            255
-        };
+        p[3] = if keep_alpha { if p[3] >= 128 { 255 } else { 0 } } else { 255 };
     }
 }
 
@@ -117,12 +113,7 @@ pub fn prepare(pic: &Picture, opt: &ConvertOptions, sel: &Selection) -> Result<P
             (pic.dir_frames(sdir).iter().collect(), 1, pic.frames_per_dir, vec![(0, 0)])
         } else {
             let n = keep_dirs * pic.frames_per_dir;
-            (
-                pic.frames.iter().take(n).collect(),
-                keep_dirs,
-                pic.frames_per_dir,
-                (0..keep_dirs).map(|d| pic.dir_shift.get(d).copied().unwrap_or((0, 0))).collect(),
-            )
+            (pic.frames.iter().take(n).collect(), keep_dirs, pic.frames_per_dir, (0..keep_dirs).map(|d| pic.dir_shift.get(d).copied().unwrap_or((0, 0))).collect())
         }
     } else {
         let i = pic.frame_index(sdir, sel.frame);
@@ -143,13 +134,7 @@ pub fn prepare(pic: &Picture, opt: &ConvertOptions, sel: &Selection) -> Result<P
         dir_shift,
         palette: None,
     };
-    let meta = |f: &Frame, data: OutData| OutFrame {
-        width: f.width,
-        height: f.height,
-        data,
-        pos: f.pos,
-        delay_ms: Some(f.delay_ms.unwrap_or(default_delay)),
-    };
+    let meta = |f: &Frame, data: OutData| OutFrame { width: f.width, height: f.height, data, pos: f.pos, delay_ms: Some(f.delay_ms.unwrap_or(default_delay)) };
 
     match &opt.depth {
         DepthChoice::Rgb16 | DepthChoice::Rgb24 | DepthChoice::Rgba32 => {
@@ -263,14 +248,7 @@ pub fn prepare(pic: &Picture, opt: &ConvertOptions, sel: &Selection) -> Result<P
                             if !keep_transp {
                                 composite(&mut rgba, opt.bg);
                             }
-                            OutData::Indexed(palette::quantize_rgba(
-                                &rgba,
-                                f.width as usize,
-                                f.height as usize,
-                                &work,
-                                &mapper,
-                                opt.dither,
-                            ))
+                            OutData::Indexed(palette::quantize_rgba(&rgba, f.width as usize, f.height as usize, &work, &mapper, opt.dither))
                         }
                     };
                     out.frames.push(meta(f, data));

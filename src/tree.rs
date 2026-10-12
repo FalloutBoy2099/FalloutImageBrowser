@@ -7,6 +7,37 @@ use std::path::{Path, PathBuf};
 pub struct FileEntry {
     pub path: PathBuf,
     pub name: String,
+    /// Taille en octets et date de modification (le tri les utilise ; `None` pour un fichier d'archive).
+    pub size: u64,
+    pub modified: Option<std::time::SystemTime>,
+}
+
+/// Critère de tri des fichiers d'un dossier.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug, serde::Serialize, serde::Deserialize)]
+pub enum SortKey {
+    #[default]
+    Name,
+    Size,
+    Modified,
+    Type,
+}
+
+/// Fichiers filtrés (sous-chaîne du nom, sans tenir compte de la casse) puis triés ; l'ordre « naturel » (`img2` avant `img10`) départage.
+pub fn ordered_files<'a>(files: &'a [FileEntry], sort: SortKey, descending: bool, filter: &str) -> Vec<&'a FileEntry> {
+    let f = filter.trim().to_lowercase();
+    let ext = |e: &FileEntry| Path::new(&e.name).extension().map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let mut v: Vec<&FileEntry> = files.iter().filter(|e| f.is_empty() || e.name.to_lowercase().contains(&f)).collect();
+    v.sort_by(|a, b| {
+        let by_name = natural_cmp(&a.name, &b.name);
+        let o = match sort {
+            SortKey::Name => by_name,
+            SortKey::Size => a.size.cmp(&b.size).then(by_name),
+            SortKey::Modified => a.modified.cmp(&b.modified).then(by_name),
+            SortKey::Type => ext(a).cmp(&ext(b)).then(by_name),
+        };
+        if descending { o.reverse() } else { o }
+    });
+    v
 }
 
 pub struct DirNode {
@@ -39,6 +70,12 @@ pub struct Tree {
     pub roots: Vec<DirNode>,
     pub rows: Vec<Row>,
     pub selected_dir: Option<PathBuf>,
+    pub sort: SortKey,
+    pub descending: bool,
+    /// Filtre sur les noms de fichiers du dossier courant (vide : tous).
+    pub filter: String,
+    /// Incrémenté à chaque reconstruction des lignes (permet de ne recalculer la largeur du contenu que si elles changent).
+    pub rev: u64,
 }
 
 pub fn natural_cmp(a: &str, b: &str) -> Ordering {
@@ -132,7 +169,7 @@ impl DirNode {
                 for e in files {
                     let p = self.path.join(e.name());
                     if is_supported(&p) {
-                        self.files.push(FileEntry { path: p, name: e.name().to_string() });
+                        self.files.push(FileEntry { path: p, name: e.name().to_string(), size: e.size as u64, modified: None });
                     }
                 }
             }
@@ -155,7 +192,8 @@ impl DirNode {
                 n.archive = true;
                 self.children.push(n);
             } else if is_supported(&p) {
-                self.files.push(FileEntry { path: p, name });
+                let md = e.metadata().ok();
+                self.files.push(FileEntry { path: p, name, size: md.as_ref().map_or(0, |m| m.len()), modified: md.and_then(|m| m.modified().ok()) });
             }
         }
         self.children.sort_by(|a, b| natural_cmp(&a.name, &b.name));
@@ -174,6 +212,12 @@ impl DirNode {
     }
 }
 
+impl Default for Tree {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Tree {
     pub fn new() -> Tree {
         let roots = root_paths()
@@ -184,7 +228,7 @@ impl Tree {
                 DirNode::new(p, name)
             })
             .collect();
-        let mut t = Tree { roots, rows: Vec::new(), selected_dir: None };
+        let mut t = Tree { roots, rows: Vec::new(), selected_dir: None, sort: SortKey::Name, descending: false, filter: String::new(), rev: 0 };
         t.rebuild();
         t
     }
@@ -209,10 +253,10 @@ impl Tree {
             if n.path == path {
                 return Some(n);
             }
-            if path.starts_with(&n.path) {
-                if let Some(f) = Self::find(&n.children, path) {
-                    return Some(f);
-                }
+            if path.starts_with(&n.path)
+                && let Some(f) = Self::find(&n.children, path)
+            {
+                return Some(f);
             }
         }
         None
@@ -260,35 +304,31 @@ impl Tree {
     }
 
     pub fn files_of(&self, dir: &Path) -> Vec<PathBuf> {
-        Self::find(&self.roots, dir).map(|n| n.files.iter().map(|f| f.path.clone()).collect()).unwrap_or_default()
+        Self::find(&self.roots, dir).map(|n| ordered_files(&n.files, self.sort, self.descending, &self.filter).iter().map(|f| f.path.clone()).collect()).unwrap_or_default()
     }
 
     pub fn rebuild(&mut self) {
         let mut rows = Vec::new();
         let sel = self.selected_dir.clone();
-        fn walk(n: &DirNode, depth: usize, sel: &Option<PathBuf>, rows: &mut Vec<Row>) {
-            rows.push(Row {
-                archive: n.archive,
-                depth,
-                kind: RowKind::Dir { expanded: n.expanded },
-                path: n.path.clone(),
-                name: n.name.clone(),
-            });
+        let (sort, desc, filter) = (self.sort, self.descending, self.filter.clone());
+        fn walk(n: &DirNode, depth: usize, sel: &Option<PathBuf>, rows: &mut Vec<Row>, view: (SortKey, bool, &str)) {
+            rows.push(Row { archive: n.archive, depth, kind: RowKind::Dir { expanded: n.expanded }, path: n.path.clone(), name: n.name.clone() });
             if n.expanded {
                 for c in &n.children {
-                    walk(c, depth + 1, sel, rows);
+                    walk(c, depth + 1, sel, rows, view);
                 }
                 if sel.as_deref() == Some(n.path.as_path()) {
-                    for f in &n.files {
+                    for f in ordered_files(&n.files, view.0, view.1, view.2) {
                         rows.push(Row { archive: false, depth: depth + 1, kind: RowKind::File, path: f.path.clone(), name: f.name.clone() });
                     }
                 }
             }
         }
         for r in &self.roots {
-            walk(r, 0, &sel, &mut rows);
+            walk(r, 0, &sel, &mut rows, (sort, desc, &filter));
         }
         self.rows = rows;
+        self.rev += 1;
     }
 }
 

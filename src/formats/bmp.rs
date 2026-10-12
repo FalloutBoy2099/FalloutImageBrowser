@@ -252,7 +252,13 @@ fn decode_rle(src: &[u8], w: usize, h: usize, rle8: bool, out: &mut [u8]) {
         i += 2;
         if n > 0 {
             for k in 0..n {
-                let v = if rle8 { c } else if k % 2 == 0 { c >> 4 } else { c & 15 };
+                let v = if rle8 {
+                    c
+                } else if k % 2 == 0 {
+                    c >> 4
+                } else {
+                    c & 15
+                };
                 put(x, y, v, out);
                 x += 1;
             }
@@ -342,9 +348,7 @@ pub fn encode(p: &Prepared) -> Result<Vec<u8>> {
                 match bpp {
                     16 => {
                         for x in 0..w {
-                            let v = ((src[x * 4] as u16 >> 3) << 10)
-                                | ((src[x * 4 + 1] as u16 >> 3) << 5)
-                                | (src[x * 4 + 2] as u16 >> 3);
+                            let v = ((src[x * 4] as u16 >> 3) << 10) | ((src[x * 4 + 1] as u16 >> 3) << 5) | (src[x * 4 + 2] as u16 >> 3);
                             row[x * 2..x * 2 + 2].copy_from_slice(&v.to_le_bytes());
                         }
                     }

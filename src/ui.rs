@@ -5,46 +5,29 @@ use crate::i18n::{self, Lang, tr};
 use crate::icons::{Icon, icon_button};
 use crate::loader::PalPolicy;
 use crate::model::*;
-use crate::tree::RowKind;
+use crate::props::{collect_props, props_json, props_text, props_xml};
+use crate::tree::{RowKind, SortKey};
+use crate::view::{Background, hex_rgb, hsv_to_rgb, parse_hex, push_recent, rgb_to_hsv};
+use crate::view::{anchor_in_canvas, canvas_size, hex_color, pixel_info, render_rgba};
 use eframe::egui::{self, Align2, Color32, ColorImage, FontId, Id, Rect, Sense, Stroke, TextureOptions, Ui, Vec2, pos2, vec2};
 use std::time::Duration;
 
 const MIN_ZOOM: f32 = 0.01;
 const MAX_ZOOM: f32 = 64.0;
 
-/// Taille logique (canevas commun d'une direction pour les animations).
-fn canvas_size(pic: &Picture, dir: usize) -> (u32, u32) {
-    if pic.frames_per_dir > 1 {
-        let (x0, y0, x1, y1) = pic.dir_bounds(dir);
-        let (w, h) = ((x1 - x0) as i64, (y1 - y0) as i64);
-        if w > 0 && h > 0 && w * h <= 64_000_000 {
-            return (w as u32, h as u32);
-        }
-    }
-    let f = &pic.frames[pic.frame_index(dir, 0)];
-    (f.width, f.height)
-}
-
-fn render_rgba(pic: &Picture, dir: usize, f: usize) -> (usize, usize, Vec<u8>) {
-    let frame = &pic.frames[pic.frame_index(dir, f)];
-    let (cw, ch) = canvas_size(pic, dir);
-    let rgba = frame_to_rgba(frame, pic.palette.as_ref());
-    if pic.frames_per_dir <= 1 || (cw == frame.width && ch == frame.height) {
-        return (frame.width as usize, frame.height as usize, rgba);
-    }
-    let (x0, y0, _, _) = pic.dir_bounds(dir);
-    let (cw, ch) = (cw as usize, ch as usize);
-    let mut canvas = vec![0u8; cw * ch * 4];
-    let (ox, oy) = ((frame.pos.0 - x0) as usize, (frame.pos.1 - y0) as usize);
-    for y in 0..frame.height as usize {
-        let dst = ((oy + y) * cw + ox) * 4;
-        let src = y * frame.width as usize * 4;
-        let n = frame.width as usize * 4;
-        if dst + n <= canvas.len() {
-            canvas[dst..dst + n].copy_from_slice(&rgba[src..src + n]);
-        }
-    }
-    (cw, ch, canvas)
+/// Actions des boutons du bas du panneau « Propriétés ».
+#[derive(Clone, Copy)]
+enum PropAction {
+    CopyImage,
+    CopyPath,
+    CopyTo,
+    MoveTo,
+    Rename,
+    Convert,
+    ConvertPalette,
+    Text,
+    Json,
+    Xml,
 }
 
 /// Réduction par moyenne de blocs k×k (pondérée par l'alpha).
@@ -82,7 +65,14 @@ impl App {
 
     pub fn handle_input(&mut self, ctx: &egui::Context) {
         // Échap ferme les fenêtres d'information (aide de la ligne de commande, À propos).
-        if !self.conv.open && !self.pal_dlg.open && self.expand_confirm.is_none() && self.folder_dlg.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if !self.conv.open
+            && !self.pal_dlg.open
+            && self.expand_confirm.is_none()
+            && self.folder_dlg.is_none()
+            && self.rename_dlg.is_none()
+            && !self.bg_picker_open
+            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        {
             if self.show_cli_help {
                 self.show_cli_help = false;
                 return;
@@ -93,7 +83,7 @@ impl App {
             }
         }
         // La fenêtre de conversion est modale : rien d'autre ne réagit.
-        if self.conv.open || self.pal_dlg.open || self.expand_confirm.is_some() || self.folder_dlg.is_some() {
+        if self.conv.open || self.pal_dlg.open || self.expand_confirm.is_some() || self.folder_dlg.is_some() || self.rename_dlg.is_some() || self.bg_picker_open {
             return;
         }
         // Dépôt de fichiers / dossiers : un fichier ouvre son dossier, qui devient le dossier courant.
@@ -135,6 +125,8 @@ impl App {
                 self.pick_dat(ctx);
             } else if pressed(Key::L) {
                 self.open_folder_dialog();
+            } else if pressed(Key::C) {
+                self.copy_image(ctx);
             } else if pressed(Key::E) {
                 self.open_convert();
             } else if pressed(Key::P) {
@@ -180,10 +172,10 @@ impl App {
             self.fit = true;
             self.pan = Vec2::ZERO;
         }
-        if pressed(Key::P) {
-            if let Some(s) = &mut self.shown {
-                s.playing = !s.playing;
-            }
+        if pressed(Key::P)
+            && let Some(s) = &mut self.shown
+        {
+            s.playing = !s.playing;
         }
         if pressed(Key::F5) {
             self.reload_dir(ctx);
@@ -194,6 +186,211 @@ impl App {
         if pressed(Key::T) {
             self.settings.show_tree = !self.settings.show_tree;
         }
+        // Affichage : rotation, symétries, grille, fond, pelure d'oignon, ancrage, diaporama, plein écran.
+        if pressed(Key::R) {
+            if ctx.input(|i| i.modifiers.shift) {
+                self.transform.rotate_left();
+            } else {
+                self.transform.rotate_right();
+            }
+        }
+        if pressed(Key::H) {
+            self.transform.flip_h = !self.transform.flip_h;
+        }
+        if pressed(Key::V) {
+            self.transform.flip_v = !self.transform.flip_v;
+        }
+        if pressed(Key::G) {
+            self.settings.show_grid = !self.settings.show_grid;
+        }
+        if pressed(Key::B) {
+            self.settings.background = self.settings.background.next();
+        }
+        if pressed(Key::O) {
+            self.settings.onion = !self.settings.onion;
+        }
+        if pressed(Key::A) {
+            self.settings.show_origin = !self.settings.show_origin;
+        }
+        if pressed(Key::S) {
+            self.toggle_slideshow(ctx);
+        }
+        if pressed(Key::F11) || (pressed(Key::Escape) && self.fullscreen) {
+            self.toggle_fullscreen(ctx);
+        }
+    }
+
+    /// Ouvre le sélecteur de couleur du fond personnalisé (fenêtre modale).
+    pub fn open_bg_picker(&mut self) {
+        self.bg_picker_open = true;
+        self.bg_picker_prev = (self.settings.background, self.settings.bg_custom, self.settings.bg_alpha);
+        self.bg_hsv = rgb_to_hsv(self.settings.bg_custom);
+        self.bg_hex = hex_rgb(self.settings.bg_custom);
+    }
+
+    /// Ferme le sélecteur en gardant la couleur choisie, qui rejoint les couleurs récentes.
+    pub fn close_bg_picker(&mut self) {
+        if self.bg_picker_open {
+            self.bg_picker_open = false;
+            push_recent(&mut self.settings.bg_recent, self.settings.bg_custom, 12);
+        }
+    }
+
+    /// Fenêtre modale du fond personnalisé : aperçu, valeur hexadécimale, curseurs teinte / saturation / valeur et couleurs
+    /// récentes. Le fond affiché derrière change en direct ; Annuler, Échap ou un clic en dehors rétablissent l'ancien fond.
+    pub fn bg_picker_window(&mut self, ctx: &egui::Context) {
+        if !self.bg_picker_open {
+            return;
+        }
+        const PRESETS: [[u8; 3]; 12] = [
+            [0, 0, 0],
+            [32, 32, 32],
+            [64, 64, 64],
+            [128, 128, 128],
+            [200, 200, 200],
+            [255, 255, 255],
+            [30, 50, 30],
+            [60, 45, 25],
+            [25, 40, 70],
+            [70, 25, 30],
+            [212, 175, 55],
+            [120, 160, 200],
+        ];
+        // Tant que la fenêtre est ouverte, le fond affiché est le fond personnalisé.
+        self.settings.background = Background::Custom;
+        let (mut ok, mut cancel) = (false, false);
+        let modal = egui::Modal::new(Id::new("bg_picker")).frame(crate::dialog::frame(ctx)).show(ctx, |ui| {
+            ui.set_width(430.0);
+            crate::dialog::setup(ui);
+            cancel |= crate::dialog::title(ui, &tr("m.background"));
+            ui.add_space(4.0);
+            let rgb = |c: [u8; 3]| Color32::from_rgb(c[0], c[1], c[2]);
+            // Aperçu de la couleur.
+            let (preview, _) = ui.allocate_exact_size(vec2(ui.available_width(), 56.0), Sense::hover());
+            let ck = self.checker_id(ctx);
+            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(preview.width() * ctx.pixels_per_point() / 16.0, preview.height() * ctx.pixels_per_point() / 16.0));
+            ui.painter().add(egui::epaint::RectShape::filled(preview, 8.0, Color32::WHITE).with_texture(ck, uv));
+            ui.painter().rect_filled(
+                preview,
+                8.0,
+                Color32::from_rgba_unmultiplied(self.settings.bg_custom[0], self.settings.bg_custom[1], self.settings.bg_custom[2], self.settings.bg_alpha),
+            );
+            ui.painter().rect_stroke(preview, 8.0, Stroke::new(1.0, Color32::from_white_alpha(45)), egui::StrokeKind::Inside);
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("HEX").weak());
+                let edit = ui.add(egui::TextEdit::singleline(&mut self.bg_hex).font(FontId::monospace(14.0)).desired_width(110.0).margin(vec2(8.0, 6.0)));
+                if edit.changed()
+                    && let Some(c) = parse_hex(&self.bg_hex)
+                {
+                    self.settings.bg_custom = c;
+                    self.bg_hsv = rgb_to_hsv(c);
+                }
+            });
+            let slider_w = ui.available_width() - 52.0;
+            let (mut h, mut sat, mut val) = self.bg_hsv;
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                changed |= gradient_slider(ui, &mut h, slider_w, |t| rgb(hsv_to_rgb(t, 1.0, 1.0)));
+                ui.label(format!("{:>3}", (h * 360.0).round() as i32));
+            });
+            ui.horizontal(|ui| {
+                let (hh, vv) = (h, val);
+                changed |= gradient_slider(ui, &mut sat, slider_w, |t| rgb(hsv_to_rgb(hh, t, vv)));
+                ui.label(format!("{:>3}", (sat * 100.0).round() as i32));
+            });
+            ui.horizontal(|ui| {
+                let (hh, ss) = (h, sat);
+                changed |= gradient_slider(ui, &mut val, slider_w, |t| rgb(hsv_to_rgb(hh, ss, t)));
+                ui.label(format!("{:>3}", (val * 100.0).round() as i32));
+            });
+            // Opacité : du transparent (damier visible) à la couleur pleine.
+            ui.horizontal(|ui| {
+                let mut a = self.settings.bg_alpha as f32 / 255.0;
+                let [r, g, b] = self.settings.bg_custom;
+                if gradient_slider(ui, &mut a, slider_w, |t| Color32::from_rgba_unmultiplied(r, g, b, (t * 255.0).round() as u8)) {
+                    self.settings.bg_alpha = (a * 255.0).round() as u8;
+                }
+                ui.label(format!("{:>3}", (self.settings.bg_alpha as f32 / 255.0 * 100.0).round() as i32));
+            });
+            if changed {
+                self.bg_hsv = (h, sat, val);
+                self.settings.bg_custom = hsv_to_rgb(h, sat, val);
+                self.bg_hex = hex_rgb(self.settings.bg_custom);
+            }
+            // Couleurs récentes, complétées par quelques couleurs usuelles.
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(tr("m.bg_recent")).weak());
+            let mut swatches = self.settings.bg_recent.clone();
+            for p in PRESETS {
+                if swatches.len() < 12 && !swatches.contains(&p) {
+                    swatches.push(p);
+                }
+            }
+            let mut pick = None;
+            egui::Grid::new("bg_recent").spacing([8.0, 8.0]).show(ui, |ui| {
+                for (i, c) in swatches.iter().enumerate() {
+                    let (r, resp) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::click());
+                    ui.painter().rect_filled(r, 9.0, rgb(*c));
+                    let stroke = if *c == self.settings.bg_custom {
+                        Stroke::new(2.0, Color32::WHITE)
+                    } else if resp.hovered() {
+                        Stroke::new(1.5, Color32::from_white_alpha(140))
+                    } else {
+                        Stroke::new(1.0, Color32::from_white_alpha(40))
+                    };
+                    ui.painter().rect_stroke(r, 9.0, stroke, egui::StrokeKind::Inside);
+                    if resp.clicked() {
+                        pick = Some(*c);
+                    }
+                    if i % 6 == 5 {
+                        ui.end_row();
+                    }
+                }
+            });
+            if let Some(c) = pick {
+                self.settings.bg_custom = c;
+                self.bg_hsv = rgb_to_hsv(c);
+                self.bg_hex = hex_rgb(c);
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                ok = crate::dialog::button(ui, tr("c.ok")).clicked();
+                cancel |= crate::dialog::button(ui, tr("c.cancel")).clicked();
+            });
+        });
+        if ok {
+            self.close_bg_picker();
+        } else if cancel || modal.should_close() {
+            (self.settings.background, self.settings.bg_custom, self.settings.bg_alpha) = self.bg_picker_prev;
+            self.bg_picker_open = false;
+        }
+    }
+
+    pub fn toggle_fullscreen(&mut self, ctx: &egui::Context) {
+        self.fullscreen = !self.fullscreen;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+    }
+
+    pub fn toggle_slideshow(&mut self, ctx: &egui::Context) {
+        self.slideshow = !self.slideshow;
+        self.slideshow_t = ctx.input(|i| i.time);
+    }
+
+    /// Diaporama : image suivante à intervalle régulier, en revenant à la première après la dernière.
+    pub fn tick_slideshow(&mut self, ctx: &egui::Context) {
+        if !self.slideshow {
+            return;
+        }
+        let now = ctx.input(|i| i.time);
+        if now - self.slideshow_t >= self.settings.slideshow_secs.max(1) as f64 {
+            self.slideshow_t = now;
+            match self.index {
+                Some(i) if i + 1 >= self.files.len() => self.goto(ctx, 0),
+                _ => self.step(ctx, 1),
+            }
+        }
+        ctx.request_repaint_after(Duration::from_millis(250));
     }
 
     /// Associe des extensions de fichier à l'application (menu Aide) et affiche le résultat.
@@ -208,11 +405,22 @@ impl App {
         }
     }
 
+    /// Copie l'image affichée (image courante d'une animation) dans le presse-papiers du système.
+    pub fn copy_image(&mut self, ctx: &egui::Context) {
+        let Some(s) = &self.shown else { return };
+        let pic = &s.loaded.pic;
+        let f = &pic.frames[pic.frame_index(s.dir, s.frame)];
+        let rgba = frame_to_rgba(f, pic.palette.as_ref());
+        let image = ColorImage::from_rgba_unmultiplied([f.width as usize, f.height as usize], &rgba);
+        ctx.copy_image(image);
+        self.toast(tr("t.image_copied"));
+    }
+
     pub fn open_in_default_program(&mut self) {
-        if let Some(p) = self.shown.as_ref().map(|s| s.loaded.path.clone()) {
-            if let Err(e) = crate::opener::open_default(&p) {
-                self.toast(e);
-            }
+        if let Some(p) = self.shown.as_ref().map(|s| s.loaded.path.clone())
+            && let Err(e) = crate::opener::open_default(&p)
+        {
+            self.toast(e);
         }
     }
 
@@ -229,6 +437,42 @@ impl App {
         self.pan *= r;
     }
 
+    /// Demande un dossier de sortie puis extrait, dans un thread, le fichier ou dossier d'archive `.dat` choisi.
+    pub fn extract_from_archive(&mut self, path: &std::path::Path) {
+        if self.extract_job.is_some() {
+            return;
+        }
+        let mut d = rfd::FileDialog::new().set_title(tr("t.extract"));
+        if let Some(dir) = &self.settings.last_dir {
+            d = d.set_directory(crate::dat::real_parent(dir).unwrap_or_else(|| dir.clone()));
+        }
+        let Some(out) = d.pick_folder() else { return };
+        let (src, dest) = (path.to_path_buf(), out.clone());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::dat::extract(&src, &dest, false).map_err(|e| e.to_string()));
+        });
+        self.extract_job = Some((rx, out));
+        self.toast(tr("t.extracting"));
+    }
+
+    /// Récupère le résultat d'une extraction terminée et l'affiche.
+    pub fn poll_extract(&mut self, ctx: &egui::Context) {
+        let Some((rx, out)) = &self.extract_job else { return };
+        match rx.try_recv() {
+            Ok(result) => {
+                let dir = out.display().to_string();
+                self.extract_job = None;
+                match result {
+                    Ok(r) => self.toast(i18n::trf("t.extract_done", &[("written", r.written.to_string()), ("skipped", r.skipped.to_string()), ("dir", dir)])),
+                    Err(e) => self.toast(i18n::trf("t.extract_failed", &[("error", e)])),
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(100)),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.extract_job = None,
+        }
+    }
+
     pub fn pick_folder(&mut self, ctx: &egui::Context) {
         let mut d = rfd::FileDialog::new().set_title(tr("m.open_folder"));
         if let Some(dir) = &self.settings.last_dir {
@@ -241,7 +485,8 @@ impl App {
 
     pub fn pick_file(&mut self, ctx: &egui::Context) {
         let exts: Vec<&str> = vec![
-            "art", "bmp", "frm", "fr0", "fr1", "fr2", "fr3", "fr4", "fr5", "gif", "jpg", "jpeg", "pcx", "rix", "tif", "tiff", "tga", "webp", "png", "psd", "psb", "pdn", "xcf", "kra", "ora", "dds", "qoi", "pbm", "pgm", "ppm", "pnm", "pam", "ase", "aseprite", "pal", "act", "gpl", "hex", "kpl", "zar", "til", "spr",
+            "art", "bmp", "frm", "fr0", "fr1", "fr2", "fr3", "fr4", "fr5", "gif", "jpg", "jpeg", "pcx", "rix", "tif", "tiff", "tga", "webp", "png", "psd", "psb", "pdn", "xcf",
+            "kra", "ora", "dds", "qoi", "pbm", "pgm", "ppm", "pnm", "pam", "ase", "aseprite", "pal", "act", "gpl", "hex", "kpl", "zar", "til", "spr",
         ];
         let mut d = rfd::FileDialog::new().set_title(tr("m.open_file")).add_filter(tr("m.images"), &exts);
         if let Some(dir) = &self.settings.last_dir {
@@ -254,10 +499,10 @@ impl App {
 
     pub fn pick_dat(&mut self, ctx: &egui::Context) {
         let mut d = rfd::FileDialog::new().set_title(tr("m.open_dat")).add_filter("DAT", &["dat", "DAT"]);
-        if let Some(dir) = &self.settings.last_dir {
-            if let Some(p) = crate::dat::real_parent(dir) {
-                d = d.set_directory(p);
-            }
+        if let Some(dir) = &self.settings.last_dir
+            && let Some(p) = crate::dat::real_parent(dir)
+        {
+            d = d.set_directory(p);
         }
         if let Some(p) = d.pick_file() {
             self.open_path(ctx, &p);
@@ -292,6 +537,9 @@ impl App {
                     self.reload_dir(&ctx);
                 }
                 ui.separator();
+                if item(ui, tr("m.copy_image"), "Ctrl+C", has_img) {
+                    self.copy_image(&ctx);
+                }
                 if item(ui, tr("m.convert"), "Ctrl+E", has_img) {
                     self.open_convert();
                 }
@@ -307,6 +555,7 @@ impl App {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
+            // Affichage : panneaux, ajustement, plein écran, diaporama, lecture et lissage.
             ui.menu_button(tr("m.view"), |ui| {
                 ui.checkbox(&mut self.settings.show_tree, tr("t.tree"));
                 ui.checkbox(&mut self.settings.show_props, tr("properties"));
@@ -315,8 +564,92 @@ impl App {
                     self.fit = true;
                     self.pan = Vec2::ZERO;
                 }
+                if item(ui, tr("m.fullscreen"), "F11", true) {
+                    self.toggle_fullscreen(&ctx);
+                }
+                let slideshow_label = if self.slideshow { tr("m.slideshow_stop") } else { tr("m.slideshow") };
+                if item(ui, slideshow_label, "S", has_img) {
+                    self.toggle_slideshow(&ctx);
+                }
+                ui.menu_button(tr("m.slideshow_delay"), |ui| {
+                    for secs in [1u32, 2, 3, 5, 10] {
+                        ui.radio_value(&mut self.settings.slideshow_secs, secs, format!("{secs} s"));
+                    }
+                });
                 ui.separator();
                 ui.checkbox(&mut self.settings.autoplay, tr("m.autoplay"));
+                ui.separator();
+                ui.label(tr("m.smoothing"));
+                for (s, k) in [(Smoothing::Auto, "m.smooth_auto"), (Smoothing::On, "m.smooth_on"), (Smoothing::Off, "m.smooth_off")] {
+                    if ui.radio_value(&mut self.settings.smoothing, s, tr(k)).clicked()
+                        && let Some(sh) = &mut self.shown
+                    {
+                        sh.tex.clear();
+                    }
+                }
+                ui.separator();
+                ui.checkbox(&mut self.win.remember_size, tr("m.remember_size"));
+                ui.checkbox(&mut self.win.remember_pos, tr("m.remember_pos"));
+            });
+            // Image : orientation de la vue, repères d'inspection et fond.
+            ui.menu_button(tr("m.image"), |ui| {
+                if item(ui, tr("m.rotate_right"), "R", has_img) {
+                    self.transform.rotate_right();
+                }
+                if item(ui, tr("m.rotate_left"), "Shift+R", has_img) {
+                    self.transform.rotate_left();
+                }
+                if item(ui, tr("m.flip_h"), "H", has_img) {
+                    self.transform.flip_h = !self.transform.flip_h;
+                }
+                if item(ui, tr("m.flip_v"), "V", has_img) {
+                    self.transform.flip_v = !self.transform.flip_v;
+                }
+                if item(ui, tr("m.reset_view"), "", has_img && !self.transform.is_identity()) {
+                    self.transform = Default::default();
+                }
+                ui.separator();
+                ui.checkbox(&mut self.settings.show_grid, format!("{}  [G]", tr("m.grid")));
+                ui.checkbox(&mut self.settings.show_pixel_info, tr("m.pixel_info"));
+                ui.checkbox(&mut self.settings.show_origin, format!("{}  [A]", tr("m.origin")));
+                ui.checkbox(&mut self.settings.onion, format!("{}  [O]", tr("m.onion")));
+                ui.separator();
+                ui.menu_button(tr("m.background"), |ui| {
+                    for (bg, key) in [(Background::Checker, "m.bg_checker"), (Background::Black, "m.bg_black"), (Background::White, "m.bg_white"), (Background::Gray, "m.bg_gray")]
+                    {
+                        ui.radio_value(&mut self.settings.background, bg, tr(key));
+                    }
+                    // Fond personnalisé : le choisir (ou cliquer sur sa couleur) l'active et ouvre le sélecteur de couleur dans une
+                    // fenêtre à part (un sélecteur ouvert dans le menu se fermerait avec lui).
+                    ui.horizontal(|ui| {
+                        let radio = ui.radio_value(&mut self.settings.background, Background::Custom, tr("m.bg_custom"));
+                        let [r, g, b] = self.settings.bg_custom;
+                        let (swatch, sw) = ui.allocate_exact_size(vec2(24.0, 14.0), Sense::click());
+                        ui.painter().rect_filled(swatch, 3.0, Color32::from_rgb(r, g, b));
+                        ui.painter().rect_stroke(swatch, 3.0, Stroke::new(1.0, ui.visuals().widgets.noninteractive.fg_stroke.color), egui::StrokeKind::Inside);
+                        if radio.clicked() || sw.clicked() {
+                            self.settings.background = Background::Custom;
+                            self.open_bg_picker();
+                            ui.close();
+                        }
+                    });
+                });
+            });
+            // Navigation : ordre des fichiers, molette et boutons de la souris.
+            ui.menu_button(tr("m.navigation"), |ui| {
+                if item(ui, tr("m.current_folder"), "Ctrl+L", true) {
+                    self.open_folder_dialog();
+                }
+                ui.separator();
+                ui.label(tr("m.sort"));
+                let mut sort_changed = false;
+                for (key, label) in [(SortKey::Name, "m.sort_name"), (SortKey::Size, "m.sort_size"), (SortKey::Modified, "m.sort_date"), (SortKey::Type, "m.sort_type")] {
+                    sort_changed |= ui.radio_value(&mut self.settings.sort, key, tr(label)).changed();
+                }
+                sort_changed |= ui.checkbox(&mut self.settings.sort_desc, tr("m.sort_desc")).changed();
+                if sort_changed {
+                    self.apply_view_options();
+                }
                 ui.separator();
                 ui.label(tr("m.wheel"));
                 ui.radio_value(&mut self.settings.wheel_nav, false, tr("m.wheel_zoom"));
@@ -325,18 +658,6 @@ impl App {
                 ui.label(tr("m.xbuttons"));
                 ui.radio_value(&mut self.settings.xbtn_zoom, false, tr("m.xb_nav"));
                 ui.radio_value(&mut self.settings.xbtn_zoom, true, tr("m.xb_zoom"));
-                ui.separator();
-                ui.checkbox(&mut self.win.remember_size, tr("m.remember_size"));
-                ui.checkbox(&mut self.win.remember_pos, tr("m.remember_pos"));
-                ui.separator();
-                ui.label(tr("m.smoothing"));
-                for (s, k) in [(Smoothing::Auto, "m.smooth_auto"), (Smoothing::On, "m.smooth_on"), (Smoothing::Off, "m.smooth_off")] {
-                    if ui.radio_value(&mut self.settings.smoothing, s, tr(k)).clicked() {
-                        if let Some(sh) = &mut self.shown {
-                            sh.tex.clear();
-                        }
-                    }
-                }
             });
             ui.menu_button(tr("m.palette"), |ui| {
                 let mode = self.settings.pal_mode;
@@ -355,6 +676,10 @@ impl App {
                 if ui.radio(mode == 2 && matches!(self.policy, PalPolicy::Custom(..)), custom_label).clicked() {
                     ui.close();
                     self.load_custom_palette(&ctx);
+                }
+                ui.separator();
+                if item(ui, tr("m.extract_pal"), "Ctrl+P", has_img) {
+                    self.open_palette_dialog();
                 }
             });
             ui.menu_button(tr("m.language"), |ui| {
@@ -466,18 +791,47 @@ impl App {
 
     pub fn tree_panel(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        // Filtre sur les noms de fichiers du dossier courant.
+        ui.add_space(5.0);
+        ui.horizontal(|ui| {
+            let clear = !self.file_filter.is_empty();
+            let w = ui.available_width() - if clear { 30.0 } else { 0.0 };
+            let edit = ui.add(egui::TextEdit::singleline(&mut self.file_filter).hint_text(tr("t.filter")).desired_width(w).margin(vec2(8.0, 7.0)));
+            let cleared = clear && ui.button("×").clicked();
+            if cleared {
+                self.file_filter.clear();
+            }
+            if edit.changed() || cleared {
+                self.apply_view_options();
+            }
+        });
+        ui.add_space(5.0);
+        // Largeur du contenu : la ligne la plus longue (indentation, icône et nom) ; recalculée quand les lignes changent.
+        if self.tree_w.0 != self.tree.rev {
+            let font = FontId::proportional(13.5);
+            let widest = self
+                .tree
+                .rows
+                .iter()
+                .map(|r| 4.0 + r.depth as f32 * 14.0 + 33.0 + ui.painter().layout_no_wrap(r.name.clone(), font.clone(), Color32::WHITE).size().x + 10.0)
+                .fold(0.0, f32::max);
+            self.tree_w = (self.tree.rev, widest);
+        }
+        let content_w = self.tree_w.1;
         let row_h = ui.text_style_height(&egui::TextStyle::Body) + 6.0;
         let total = self.tree.rows.len();
         let cur = self.wanted.clone();
         let sel_dir = self.tree.selected_dir.clone();
         let mut action: Option<(usize, bool)> = None; // (ligne, clic sur la flèche)
         let mut ctx_act: Option<(std::path::PathBuf, u8)> = None;
-        let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+        let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
         if let Some(r) = self.tree_scroll_to.take() {
             let target = (r as f32 * row_h - ui.available_height() * 0.5).max(0.0);
             area = area.vertical_scroll_offset(target);
         }
         area.show_rows(ui, row_h, total, |ui, range| {
+            // Un contenu plus large que le panneau fait apparaître la barre de défilement horizontale.
+            ui.set_min_width(content_w);
             let w = ui.available_width();
             for i in range {
                 let row = &self.tree.rows[i];
@@ -493,7 +847,6 @@ impl App {
                 let x0 = rect.left() + 4.0 + row.depth as f32 * 14.0;
                 let cy = rect.center().y;
                 let text_col = if selected { vis.selection.stroke.color } else { vis.text_color() };
-                let text_x;
                 match row.kind {
                     RowKind::Dir { expanded } => {
                         let c = pos2(x0 + 6.0, cy);
@@ -514,7 +867,6 @@ impl App {
                         };
                         ui.painter().rect_filled(Rect::from_min_size(pos2(fx, cy - 4.0), vec2(13.0, 9.0)), 1.5, fcol);
                         ui.painter().rect_filled(Rect::from_min_size(pos2(fx, cy - 6.0), vec2(6.0, 3.0)), 1.0, fcol);
-                        text_x = fx + 18.0;
                     }
                     RowKind::File => {
                         let fx = x0 + 15.0;
@@ -522,15 +874,14 @@ impl App {
                         ui.painter().rect_stroke(Rect::from_min_size(pos2(fx + 1.0, cy - 6.0), vec2(10.0, 12.0)), 1.5, Stroke::new(1.2, col), egui::StrokeKind::Inside);
                         ui.painter().line_segment([pos2(fx + 3.0, cy + 2.0), pos2(fx + 6.0, cy - 1.0)], Stroke::new(1.0, col));
                         ui.painter().line_segment([pos2(fx + 6.0, cy - 1.0), pos2(fx + 9.0, cy + 2.0)], Stroke::new(1.0, col));
-                        text_x = fx + 18.0;
                     }
                 }
+                let text_x = x0 + 15.0 + 18.0;
                 let clip = ui.painter().with_clip_rect(rect);
                 let font = FontId::proportional(13.5);
                 clip.text(pos2(text_x, cy), Align2::LEFT_CENTER, &row.name, font, if is_sel_dir && !selected { vis.strong_text_color() } else { text_col });
                 if resp.clicked() {
-                    let on_arrow = matches!(row.kind, RowKind::Dir { .. })
-                        && resp.interact_pointer_pos().is_some_and(|p| p.x < x0 + 14.0);
+                    let on_arrow = matches!(row.kind, RowKind::Dir { .. }) && resp.interact_pointer_pos().is_some_and(|p| p.x < x0 + 14.0);
                     action = Some((i, on_arrow));
                 }
                 let is_dir = matches!(row.kind, RowKind::Dir { .. });
@@ -544,6 +895,10 @@ impl App {
                         ui.close();
                     }
                     ui.separator();
+                    if ui.add_enabled(crate::dat::is_virtual(&row.path), egui::Button::new(tr("t.extract"))).clicked() {
+                        ctx_act = Some((row.path.clone(), 3));
+                        ui.close();
+                    }
                     if ui.button(tr("t.open_explorer")).clicked() {
                         ctx_act = Some((row.path.clone(), 2));
                         ui.close();
@@ -563,6 +918,8 @@ impl App {
                 if let Err(e) = crate::opener::reveal(&path) {
                     self.toast(e);
                 }
+            } else if what == 3 {
+                self.extract_from_archive(&path);
             } else {
                 self.tree.collapse_others(&path);
             }
@@ -593,37 +950,47 @@ impl App {
             return;
         };
         let pic = &s.loaded.pic;
-        // Boutons du bas : copier toutes les propriétés en texte ou en JSON.
-        let mut copy: Option<bool> = None;
+        let path = s.loaded.path.clone();
+        // Un fichier d'archive .DAT peut être copié mais ni déplacé ni renommé.
+        let on_disk = !crate::dat::is_virtual(&path);
+        // Boutons du bas (icônes seules) : image et chemin ; copier, déplacer, renommer ; convertir ; copier les informations.
+        let mut action: Option<PropAction> = None;
         egui::Panel::bottom("props_copy").show(ui, |ui| {
             ui.add_space(3.0);
-            ui.horizontal(|ui| {
-                if icon_button(ui, Icon::CopyText, &tr("t.copy_text"), false, true).clicked() {
-                    copy = Some(false);
-                }
-                if icon_button(ui, Icon::CopyJson, &tr("t.copy_json"), false, true).clicked() {
-                    copy = Some(true);
-                }
+            ui.horizontal_wrapped(|ui| {
+                let mut button = |ui: &mut Ui, icon: Icon, tip: &str, enabled: bool, act: PropAction| {
+                    if icon_button(ui, icon, &tr(tip), false, enabled).clicked() {
+                        action = Some(act);
+                    }
+                };
+                button(ui, Icon::CopyImage, "m.copy_image", true, PropAction::CopyImage);
+                button(ui, Icon::CopyPath, "t.copy_path", true, PropAction::CopyPath);
+                ui.separator();
+                button(ui, Icon::CopyTo, "t.copy_to", true, PropAction::CopyTo);
+                button(ui, Icon::MoveTo, "t.move_to", on_disk, PropAction::MoveTo);
+                button(ui, Icon::Rename, "t.rename", on_disk, PropAction::Rename);
+                ui.separator();
+                button(ui, Icon::Convert, "m.convert", true, PropAction::Convert);
+                button(ui, Icon::Palette, "m.extract_pal", true, PropAction::ConvertPalette);
+                ui.separator();
+                button(ui, Icon::CopyText, "t.copy_text", true, PropAction::Text);
+                button(ui, Icon::CopyJson, "t.copy_json", true, PropAction::Json);
+                button(ui, Icon::CopyXml, "t.copy_xml", true, PropAction::Xml);
             });
             ui.add_space(3.0);
         });
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            let mut sid = 0;
-            for sec in &pic.sections {
-                sid += 1;
-                egui::CollapsingHeader::new(egui::RichText::new(tr(&sec.title)).strong())
-                    .id_salt(("sec", &sec.title))
-                    .default_open(sec.title != "sec.exif")
-                    .show(ui, |ui| {
-                        egui::Grid::new(("grid", sid)).num_columns(2).striped(true).spacing([10.0, 3.0]).show(ui, |ui| {
-                            for p in &sec.items {
-                                ui.label(egui::RichText::new(tr(&p.key)).weak());
-                                let v = if p.value.starts_with("p.") || p.value.starts_with("c.") { tr(&p.value) } else { p.value.clone() };
-                                ui.add(egui::Label::new(v).wrap().selectable(true));
-                                ui.end_row();
-                            }
-                        });
+            for (sid, sec) in pic.sections.iter().enumerate() {
+                egui::CollapsingHeader::new(egui::RichText::new(tr(&sec.title)).strong()).id_salt(("sec", &sec.title)).default_open(sec.title != "sec.exif").show(ui, |ui| {
+                    egui::Grid::new(("grid", sid)).num_columns(2).striped(true).spacing([10.0, 3.0]).show(ui, |ui| {
+                        for p in &sec.items {
+                            ui.label(egui::RichText::new(tr(&p.key)).weak());
+                            let v = if p.value.starts_with("p.") || p.value.starts_with("c.") { tr(&p.value) } else { p.value.clone() };
+                            ui.add(egui::Label::new(v).wrap().selectable(true));
+                            ui.end_row();
+                        }
                     });
+                });
             }
             // Image courante (animations / directions).
             if pic.frames.len() > 1 {
@@ -658,11 +1025,114 @@ impl App {
                 });
             }
         });
-        if let Some(json) = copy {
-            let sections = collect_props(pic, s.dir, s.frame);
-            let out = if json { props_json(&sections) } else { props_text(&sections) };
-            ui.ctx().copy_text(out);
+        let ctx = ui.ctx().clone();
+        let info = match action {
+            Some(PropAction::Text) => Some(props_text(&collect_props(pic, s.dir, s.frame))),
+            Some(PropAction::Json) => Some(props_json(&collect_props(pic, s.dir, s.frame))),
+            Some(PropAction::Xml) => Some(props_xml(&collect_props(pic, s.dir, s.frame))),
+            _ => None,
+        };
+        if let Some(out) = info {
+            ctx.copy_text(out);
             self.toast(tr("t.copied"));
+        }
+        match action {
+            Some(PropAction::CopyImage) => self.copy_image(&ctx),
+            Some(PropAction::CopyPath) => {
+                ctx.copy_text(path.display().to_string());
+                self.toast(tr("t.path_copied"));
+            }
+            Some(PropAction::CopyTo) => self.copy_or_move_to(&ctx, &path, false),
+            Some(PropAction::MoveTo) => self.copy_or_move_to(&ctx, &path, true),
+            Some(PropAction::Rename) => self.open_rename(&path),
+            Some(PropAction::Convert) => self.open_convert(),
+            Some(PropAction::ConvertPalette) => self.open_palette_dialog(),
+            _ => {}
+        }
+    }
+
+    /// Demande un dossier puis copie ou déplace le fichier affiché ; après un déplacement, le fichier suivant s'affiche.
+    pub fn copy_or_move_to(&mut self, ctx: &egui::Context, path: &std::path::Path, mv: bool) {
+        let mut d = rfd::FileDialog::new().set_title(tr(if mv { "t.move_to" } else { "t.copy_to" }));
+        if let Some(dir) = crate::dat::real_parent(path) {
+            d = d.set_directory(dir);
+        }
+        let Some(dest) = d.pick_folder() else { return };
+        let result = if mv { crate::fileops::move_to(path, &dest) } else { crate::fileops::copy_to(path, &dest) };
+        match result {
+            Ok(new) => {
+                if mv {
+                    let idx = self.index.unwrap_or(0);
+                    // Rien à réafficher de force : le fichier déplacé n'est plus dans le dossier.
+                    self.wanted = None;
+                    self.reload_dir(ctx);
+                    match self.files.get(idx.min(self.files.len().saturating_sub(1))).cloned() {
+                        Some(next) => self.show_file(ctx, &next),
+                        None => {
+                            self.shown = None;
+                            self.error = None;
+                        }
+                    }
+                }
+                self.toast(i18n::trf(if mv { "t.moved_to" } else { "t.copied_to" }, &[("path", new.display().to_string())]));
+            }
+            Err(e) => self.toast(i18n::trf("t.op_failed", &[("error", e.to_string())])),
+        }
+    }
+
+    pub fn open_rename(&mut self, path: &std::path::Path) {
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        self.rename_dlg = Some(crate::app::RenameDlg { path: path.to_path_buf(), name, fresh: true });
+    }
+
+    /// Fenêtre modale « Renommer » : le nom sans l'extension est sélectionné ; un nom invalide ou déjà pris est refusé.
+    pub fn rename_window(&mut self, ctx: &egui::Context) {
+        let Some(mut dlg) = self.rename_dlg.take() else { return };
+        let name = dlg.name.trim().to_string();
+        let current = dlg.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let invalid = crate::fileops::validate_name(&name).is_err();
+        let exists = !invalid && !name.eq_ignore_ascii_case(&current) && dlg.path.with_file_name(&name).exists();
+        let can_rename = !invalid && !exists && name != current;
+        let (mut go, mut cancel) = (false, false);
+        let modal = egui::Modal::new(Id::new("rename_dlg")).frame(crate::dialog::frame(ctx)).show(ctx, |ui| {
+            ui.set_width(480.0);
+            crate::dialog::setup(ui);
+            cancel |= crate::dialog::title(ui, &tr("t.rename"));
+            ui.add_space(4.0);
+            let mut out = egui::TextEdit::singleline(&mut dlg.name).desired_width(f32::INFINITY).show(ui);
+            if dlg.fresh {
+                out.response.request_focus();
+                let stem_end = dlg.name.rfind('.').filter(|i| *i > 0).unwrap_or(dlg.name.len());
+                let chars = dlg.name[..stem_end].chars().count();
+                out.state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(chars))));
+                out.state.store(ui.ctx(), out.response.id);
+            }
+            if out.response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && can_rename {
+                go = true;
+            }
+            if exists {
+                ui.colored_label(ui.visuals().error_fg_color, tr("t.rename_exists"));
+            } else if invalid && !dlg.name.trim().is_empty() {
+                ui.colored_label(ui.visuals().error_fg_color, tr("t.rename_invalid"));
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                go |= crate::dialog::button_enabled(ui, can_rename, tr("c.ok")).clicked();
+                cancel |= crate::dialog::button(ui, tr("c.cancel")).clicked();
+            });
+        });
+        if go {
+            match crate::fileops::rename(&dlg.path, &dlg.name) {
+                Ok(new) => {
+                    self.toast(i18n::trf("t.renamed", &[("name", new.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())]));
+                    self.wanted = Some(new);
+                    self.reload_dir(ctx);
+                }
+                Err(e) => self.toast(i18n::trf("t.op_failed", &[("error", e.to_string())])),
+            }
+        } else if !cancel && !modal.should_close() {
+            dlg.fresh = false;
+            self.rename_dlg = Some(dlg);
         }
     }
 
@@ -678,24 +1148,35 @@ impl App {
                 }
             }
             let img = ColorImage { size: [16, 16], source_size: Vec2::new(16.0, 16.0), pixels: px };
-            let opts = TextureOptions { magnification: egui::TextureFilter::Nearest, minification: egui::TextureFilter::Nearest, wrap_mode: egui::TextureWrapMode::Repeat, mipmap_mode: None };
+            let opts = TextureOptions {
+                magnification: egui::TextureFilter::Nearest,
+                minification: egui::TextureFilter::Nearest,
+                wrap_mode: egui::TextureWrapMode::Repeat,
+                mipmap_mode: None,
+            };
             self.checker = Some(ctx.load_texture("checker", img, opts));
         }
         self.checker.as_ref().unwrap().id()
     }
 
-    fn ensure_tex(&mut self, ctx: &egui::Context, level: u8) -> Option<(egui::TextureId, u32, u32)> {
+    /// Texture de l'image `frame` de la direction affichée, avec la rotation / les symétries de la vue ; renvoie aussi les
+    /// dimensions (après transformation) de l'image complète.
+    fn ensure_tex(&mut self, ctx: &egui::Context, level: u8, frame: usize) -> Option<(egui::TextureId, u32, u32)> {
         let smoothing = self.settings.smoothing;
+        let transform = self.transform;
         let s = self.shown.as_mut()?;
         let pic = &s.loaded.pic;
-        let (w, h) = canvas_size(pic, s.dir);
-        let key = (s.dir, s.frame, level);
+        let (cw0, ch0) = canvas_size(pic, s.dir);
+        let (w, h) = transform.size(cw0 as usize, ch0 as usize);
+        let (w, h) = (w as u32, h as u32);
+        let key = (s.dir, frame, level, transform.id());
         if !s.tex.contains_key(&key) {
             let cap = if pic.is_animated() { 96 } else { 8 };
             if s.tex.len() >= cap {
                 s.tex.clear();
             }
-            let (cw, ch, rgba) = render_rgba(pic, s.dir, s.frame);
+            let (cw, ch, rgba) = render_rgba(pic, s.dir, frame);
+            let (rgba, cw, ch) = transform.apply(&rgba, cw, ch);
             let k = 1usize << level;
             let (rgba, tw, th) = if k > 1 { box_downscale(&rgba, cw, ch, k) } else { (rgba, cw, ch) };
             let img = ColorImage::from_rgba_unmultiplied([tw.max(1), th.max(1)], &rgba);
@@ -707,7 +1188,7 @@ impl App {
             };
             let min = if smoothing == Smoothing::Off { egui::TextureFilter::Nearest } else { egui::TextureFilter::Linear };
             let handle = ctx.load_texture(
-                format!("img-{}-{}-{}", s.dir, s.frame, level),
+                format!("img-{}-{}-{}-{}", s.dir, frame, level, transform.id()),
                 img,
                 TextureOptions { magnification: mag, minification: min, wrap_mode: egui::TextureWrapMode::ClampToEdge, mipmap_mode: None },
             );
@@ -722,11 +1203,18 @@ impl App {
         let resp = ui.allocate_rect(rect, Sense::click_and_drag());
         let ppp = ctx.pixels_per_point();
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+        // Fond de toute la zone d'affichage : couleur choisie, sinon celle du thème (le damier n'est dessiné que derrière l'image).
+        let translucent = self.settings.background == Background::Custom && self.settings.bg_alpha < 255;
+        let backdrop = match self.settings.background.color(self.settings.bg_custom) {
+            Some(c) if !translucent => Color32::from_rgb(c[0], c[1], c[2]),
+            _ => ui.visuals().extreme_bg_color,
+        };
+        painter.rect_filled(rect, 0.0, backdrop);
         let mut nav_step = 0i32;
 
         if let Some(s) = &self.shown {
-            let (iw, ih) = canvas_size(&s.loaded.pic, s.dir);
+            let (cw0, ch0) = canvas_size(&s.loaded.pic, s.dir);
+            let (iw, ih) = self.transform.size(cw0 as usize, ch0 as usize);
             let (iw, ih) = (iw as f32, ih as f32);
             // Zoom « ajusté ».
             if self.fit {
@@ -772,16 +1260,16 @@ impl App {
                 if (factor - 1.0).abs() < 1e-4 {
                     factor = 1.0;
                 }
-                if factor != 1.0 {
-                    if let Some(cur) = resp.hover_pos() {
-                        let old = self.zoom;
-                        let new = (old * factor).clamp(MIN_ZOOM, MAX_ZOOM);
-                        let ratio = new / old;
-                        let rel = cur - rect.center();
-                        self.pan = rel - (rel - self.pan) * ratio;
-                        self.zoom = new;
-                        self.fit = false;
-                    }
+                if factor != 1.0
+                    && let Some(cur) = resp.hover_pos()
+                {
+                    let old = self.zoom;
+                    let new = (old * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+                    let ratio = new / old;
+                    let rel = cur - rect.center();
+                    self.pan = rel - (rel - self.pan) * ratio;
+                    self.zoom = new;
+                    self.fit = false;
                 }
             }
             // Limiter le déplacement.
@@ -798,22 +1286,104 @@ impl App {
             while (iw / (1u32 << level) as f32).max(ih / (1u32 << level) as f32) > max_side && level < 12 {
                 level += 1;
             }
-            let tex = self.ensure_tex(&ctx, level);
+            let (cur_frame, prev_frame) = match &self.shown {
+                Some(s) => {
+                    let n = s.loaded.pic.dir_len(s.dir);
+                    (s.frame, if n > 1 { Some(if s.frame > 0 { s.frame - 1 } else { n - 1 }) } else { None })
+                }
+                None => (0, None),
+            };
+            let tex = self.ensure_tex(&ctx, level, cur_frame);
+            // Pelure d'oignon : l'image précédente de l'animation, en transparence, sous l'image courante.
+            let onion_tex = if self.settings.onion { prev_frame.and_then(|f| self.ensure_tex(&ctx, level, f)) } else { None };
+            // Point d'ancrage (centre de l'hexagone pour un FRM), dans les coordonnées de la vue transformée.
+            let anchor = if self.settings.show_origin {
+                self.shown.as_ref().and_then(|s| {
+                    let pic = &s.loaded.pic;
+                    matches!(pic.format, Format::Frm | Format::Art | Format::Spr).then(|| {
+                        let (ax, ay) = anchor_in_canvas(pic, s.dir);
+                        self.transform.map_point(ax as f32, ay as f32, cw0 as usize, ch0 as usize)
+                    })
+                })
+            } else {
+                None
+            };
             if let Some((tid, w, h)) = tex {
-                let size_pts = vec2(w as f32, h as f32) * self.zoom / ppp;
+                let sc = self.zoom / ppp; // points par pixel de l'image
+                let size_pts = vec2(w as f32, h as f32) * sc;
                 let snap = |v: f32| (v * ppp).round() / ppp;
                 let mut min = rect.center() + self.pan - size_pts * 0.5;
                 min = pos2(snap(min.x), snap(min.y));
                 let img_rect = Rect::from_min_size(min, size_pts);
                 let vis = img_rect.intersect(rect);
                 if vis.is_positive() {
-                    let ck = self.checker_id(&ctx);
-                    let uv = Rect::from_min_max(
-                        pos2((vis.min.x - img_rect.min.x) * ppp / 16.0, (vis.min.y - img_rect.min.y) * ppp / 16.0),
-                        pos2((vis.max.x - img_rect.min.x) * ppp / 16.0, (vis.max.y - img_rect.min.y) * ppp / 16.0),
-                    );
-                    painter.image(ck, vis, uv, Color32::WHITE);
-                    painter.image(tid, img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                    let full_uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+                    // Fond en damier sur toute la zone d'affichage (un fond uni est déjà peint plus haut) ; le damier reste fixe quand on déplace l'image.
+                    if self.settings.background.color(self.settings.bg_custom).is_none() || translucent {
+                        let ck = self.checker_id(&ctx);
+                        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(rect.width() * ppp / 16.0, rect.height() * ppp / 16.0));
+                        painter.image(ck, rect, uv, Color32::WHITE);
+                    }
+                    // Fond personnalisé translucide : la couleur se superpose au damier.
+                    if translucent {
+                        let [r, g, b] = self.settings.bg_custom;
+                        painter.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(r, g, b, self.settings.bg_alpha));
+                    }
+                    if let Some((oid, _, _)) = onion_tex {
+                        painter.image(oid, img_rect, full_uv, Color32::from_white_alpha(90));
+                    }
+                    painter.image(tid, img_rect, full_uv, Color32::WHITE);
+                    // Grille de pixels (à partir de 4 points par pixel, soit un zoom de 400 %).
+                    if self.settings.show_grid && sc >= 4.0 && level == 0 {
+                        let stroke = Stroke::new(1.0, Color32::from_black_alpha(90));
+                        let (i0, i1) = (((vis.min.x - img_rect.min.x) / sc).floor() as i32, ((vis.max.x - img_rect.min.x) / sc).ceil() as i32);
+                        for i in i0..=i1 {
+                            let x = img_rect.min.x + i as f32 * sc;
+                            if x >= vis.min.x && x <= vis.max.x {
+                                painter.line_segment([pos2(x, vis.min.y), pos2(x, vis.max.y)], stroke);
+                            }
+                        }
+                        let (j0, j1) = (((vis.min.y - img_rect.min.y) / sc).floor() as i32, ((vis.max.y - img_rect.min.y) / sc).ceil() as i32);
+                        for j in j0..=j1 {
+                            let y = img_rect.min.y + j as f32 * sc;
+                            if y >= vis.min.y && y <= vis.max.y {
+                                painter.line_segment([pos2(vis.min.x, y), pos2(vis.max.x, y)], stroke);
+                            }
+                        }
+                    }
+                    // Repère d'ancrage.
+                    if let Some((ax, ay)) = anchor {
+                        let c = img_rect.min + vec2(ax, ay) * sc;
+                        let (dark, light) = (Stroke::new(3.0, Color32::from_black_alpha(200)), Stroke::new(1.5, Color32::from_rgb(255, 80, 60)));
+                        for st in [dark, light] {
+                            painter.circle_stroke(c, 6.0, st);
+                            painter.line_segment([c - vec2(14.0, 0.0), c + vec2(14.0, 0.0)], st);
+                            painter.line_segment([c - vec2(0.0, 14.0), c + vec2(0.0, 14.0)], st);
+                        }
+                    }
+                }
+                // Pixel sous le curseur : position, couleur, indice de palette.
+                if self.settings.show_pixel_info
+                    && let Some(hp) = resp.hover_pos()
+                    && img_rect.contains(hp)
+                {
+                    let tx = (((hp.x - img_rect.min.x) / sc).floor().max(0.0) as usize).min((w as usize).saturating_sub(1));
+                    let ty = (((hp.y - img_rect.min.y) / sc).floor().max(0.0) as usize).min((h as usize).saturating_sub(1));
+                    let (sx, sy) = self.transform.source_of(tx, ty, cw0 as usize, ch0 as usize);
+                    let info = self.shown.as_ref().and_then(|s| pixel_info(&s.loaded.pic, s.dir, s.frame, sx as i32, sy as i32));
+                    if let Some(info) = info {
+                        let mut text = format!("{}, {}   {}", info.x, info.y, hex_color(info.rgba));
+                        if let Some(i) = info.index {
+                            text += &format!("   idx {i}");
+                        }
+                        let galley = painter.layout_no_wrap(text, FontId::monospace(13.0), Color32::WHITE);
+                        let sz = galley.size();
+                        let bubble = Rect::from_min_size(rect.left_bottom() + vec2(10.0, -18.0 - sz.y), sz + vec2(sz.y + 16.0, 8.0));
+                        painter.rect_filled(bubble, 4.0, Color32::from_black_alpha(190));
+                        let swatch = Rect::from_min_size(bubble.min + vec2(5.0, 4.0), vec2(sz.y, sz.y));
+                        painter.rect_filled(swatch, 2.0, Color32::from_rgb(info.rgba[0], info.rgba[1], info.rgba[2]));
+                        painter.galley(bubble.min + vec2(sz.y + 12.0, 4.0), galley, Color32::WHITE);
+                    }
                 }
             }
             self.anim_overlay(&ctx, rect);
@@ -830,6 +1400,10 @@ impl App {
         let mut open_req = false;
         if self.shown.is_some() {
             resp.context_menu(|ui| {
+                if ui.add(egui::Button::new(tr("m.copy_image")).shortcut_text("Ctrl+C")).clicked() {
+                    self.copy_image(&ctx);
+                    ui.close();
+                }
                 if ui.add(egui::Button::new(tr("m.convert")).shortcut_text("Ctrl+E")).clicked() {
                     self.open_convert();
                     ui.close();
@@ -854,13 +1428,13 @@ impl App {
             self.open_in_default_program();
         }
         // Erreur de chargement par-dessus une image affichée.
-        if self.shown.is_some() {
-            if let Some((p, e)) = &self.error {
-                let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                let r = Rect::from_min_size(rect.left_top() + vec2(10.0, 10.0), vec2(rect.width() - 20.0, 22.0));
-                painter.rect_filled(r, 4.0, Color32::from_rgba_unmultiplied(120, 30, 30, 220));
-                painter.text(r.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, format!("{name} : {e}"), FontId::proportional(13.0), Color32::WHITE);
-            }
+        if self.shown.is_some()
+            && let Some((p, e)) = &self.error
+        {
+            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let r = Rect::from_min_size(rect.left_top() + vec2(10.0, 10.0), vec2(rect.width() - 20.0, 22.0));
+            painter.rect_filled(r, 4.0, Color32::from_rgba_unmultiplied(120, 30, 30, 220));
+            painter.text(r.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, format!("{name} : {e}"), FontId::proportional(13.0), Color32::WHITE);
         }
         if self.is_loading() {
             let c = rect.right_top() + vec2(-24.0, 24.0);
@@ -881,11 +1455,9 @@ impl App {
         }
         let (mut n, dirs) = (pic.dir_len(s.dir), pic.directions);
         let (mut dir, mut frame, mut playing) = (s.dir, s.frame, s.playing);
-        egui::Area::new(Id::new("anim_overlay"))
-            .order(egui::Order::Foreground)
-            .pivot(Align2::CENTER_BOTTOM)
-            .fixed_pos(pos2(rect.center().x, rect.bottom() - 12.0))
-            .show(ctx, |ui| {
+        egui::Area::new(Id::new("anim_overlay")).order(egui::Order::Foreground).pivot(Align2::CENTER_BOTTOM).fixed_pos(pos2(rect.center().x, rect.bottom() - 12.0)).show(
+            ctx,
+            |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         if n > 1 {
@@ -912,17 +1484,21 @@ impl App {
                         if dirs > 1 {
                             ui.separator();
                             ui.label(tr("a.direction"));
-                            egui::ComboBox::from_id_salt("dir_combo").selected_text(pic.dir_label(dir)).width(if pic.dir_labels.is_empty() { 50.0 } else { 230.0 }).show_ui(ui, |ui| {
-                                for d in 0..dirs {
-                                    ui.selectable_value(&mut dir, d, pic.dir_label(d));
-                                }
-                            });
+                            egui::ComboBox::from_id_salt("dir_combo").selected_text(pic.dir_label(dir)).width(if pic.dir_labels.is_empty() { 50.0 } else { 230.0 }).show_ui(
+                                ui,
+                                |ui| {
+                                    for d in 0..dirs {
+                                        ui.selectable_value(&mut dir, d, pic.dir_label(d));
+                                    }
+                                },
+                            );
                             n = pic.dir_len(dir);
                             frame = frame.min(n.saturating_sub(1));
                         }
                     });
                 });
-            });
+            },
+        );
         let changed = self.shown.as_ref().is_some_and(|s| s.dir != dir || s.frame != frame || s.playing != playing);
         if changed {
             let fit = self.fit;
@@ -947,18 +1523,21 @@ impl App {
 
     pub fn cli_help_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_cli_help;
-        egui::Window::new(tr("m.cli_help")).open(&mut open).collapsible(false).resizable(true).default_size([760.0, 560.0]).show(ctx, |ui| {
-            ui.add(egui::Label::new(tr("cli.intro")).wrap());
-            ui.horizontal(|ui| {
-                if ui.button(tr("c.copy")).clicked() {
-                    ctx.copy_text(crate::cli::usage());
-                }
-            });
-            ui.separator();
-            egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(crate::cli::usage()).monospace().size(12.5)).extend().selectable(true));
-            });
-        });
+        egui::Window::new(tr("m.cli_help")).open(&mut open).frame(crate::dialog::window_frame(ctx)).collapsible(false).resizable(true).default_size([760.0, 560.0]).show(
+            ctx,
+            |ui| {
+                ui.add(egui::Label::new(tr("cli.intro")).wrap());
+                ui.horizontal(|ui| {
+                    if ui.button(tr("c.copy")).clicked() {
+                        ctx.copy_text(crate::cli::usage());
+                    }
+                });
+                ui.separator();
+                egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+                    ui.add(egui::Label::new(egui::RichText::new(crate::cli::usage()).monospace().size(12.5)).extend().selectable(true));
+                });
+            },
+        );
         self.show_cli_help = open;
     }
 
@@ -975,9 +1554,10 @@ impl App {
         let path = std::path::PathBuf::from(text.trim().trim_matches('"'));
         let valid = !text.trim().is_empty() && (matches!(crate::dat::stat(&path), Some(crate::dat::Stat::Dir)) || path.is_dir());
         let (mut go, mut cancel) = (false, false);
-        let modal = egui::Modal::new(Id::new("folder_dlg")).show(ctx, |ui| {
+        let modal = egui::Modal::new(Id::new("folder_dlg")).frame(crate::dialog::frame(ctx)).show(ctx, |ui| {
             ui.set_width(560.0);
-            ui.heading(tr("t.folder"));
+            crate::dialog::setup(ui);
+            cancel |= crate::dialog::title(ui, &tr("t.folder"));
             ui.add_space(4.0);
             let mut out = egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY).show(ui);
             if fresh {
@@ -991,10 +1571,10 @@ impl App {
             if !valid && !text.trim().is_empty() {
                 ui.colored_label(ui.visuals().error_fg_color, tr("t.folder_missing"));
             }
-            ui.add_space(6.0);
+            ui.separator();
             ui.horizontal(|ui| {
-                go |= ui.add_enabled(valid, egui::Button::new(tr("c.ok"))).clicked();
-                cancel = ui.button(tr("c.cancel")).clicked();
+                go |= crate::dialog::button_enabled(ui, valid, tr("c.ok")).clicked();
+                cancel |= crate::dialog::button(ui, tr("c.cancel")).clicked();
             });
         });
         if go {
@@ -1008,14 +1588,15 @@ impl App {
     pub fn expand_confirm_window(&mut self, ctx: &egui::Context) {
         let Some(path) = self.expand_confirm.clone() else { return };
         let (mut yes, mut no) = (false, false);
-        let modal = egui::Modal::new(Id::new("expand_confirm")).show(ctx, |ui| {
-            ui.set_max_width(380.0);
-            ui.heading(tr("t.expand_all"));
+        let modal = egui::Modal::new(Id::new("expand_confirm")).frame(crate::dialog::frame(ctx)).show(ctx, |ui| {
+            ui.set_width(420.0);
+            crate::dialog::setup(ui);
+            no |= crate::dialog::title(ui, &tr("t.expand_all"));
             ui.add(egui::Label::new(tr("t.expand_confirm")).wrap());
-            ui.add_space(6.0);
+            ui.separator();
             ui.horizontal(|ui| {
-                yes = ui.button(tr("t.expand_all")).clicked();
-                no = ui.button(tr("c.cancel")).clicked();
+                yes = crate::dialog::button(ui, tr("t.expand_all")).clicked();
+                no |= crate::dialog::button(ui, tr("c.cancel")).clicked();
             });
         });
         if yes {
@@ -1028,27 +1609,33 @@ impl App {
 
     pub fn about_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_about;
-        egui::Window::new(tr("m.about")).open(&mut open).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(ctx, |ui| {
-            ui.set_min_width(480.0);
-            ui.horizontal(|ui| {
-                ui.heading("Fallout Image Browser");
-                ui.label(egui::RichText::new("by Kain").italics());
+        egui::Window::new(tr("m.about"))
+            .open(&mut open)
+            .frame(crate::dialog::window_frame(ctx))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_min_width(480.0);
+                ui.horizontal(|ui| {
+                    ui.heading("Fallout Image Browser");
+                    ui.label(egui::RichText::new("by Kain").italics());
+                });
+                ui.label(egui::RichText::new(format!("v{}  ·  Rust + egui + wgpu", env!("CARGO_PKG_VERSION"))).weak());
+                ui.label(egui::RichText::new(tr("about.based")).weak());
+                ui.add_space(4.0);
+                ui.separator();
+                ui.label(egui::RichText::new(tr("about.formats")).strong());
+                ui.add(egui::Label::new(Format::ALL.iter().map(|f| f.name()).collect::<Vec<_>>().join("  ·  ")).extend());
+                ui.label(egui::RichText::new(tr("about.readonly")).weak().small());
+                ui.add(egui::Label::new(Format::READ_ONLY.iter().filter(|f| **f != Format::Palette).map(|f| f.name()).collect::<Vec<_>>().join("  ·  ")).extend());
+                ui.label(egui::RichText::new(tr("about.palettes")).weak().small());
+                ui.label("PAL  ·  ACT  ·  GPL  ·  KPL  ·  HEX");
+                ui.add_space(4.0);
+                ui.separator();
+                ui.label(egui::RichText::new(tr("about.keys_title")).strong());
+                ui.label(tr("about.keys"));
             });
-            ui.label(egui::RichText::new(format!("v{}  ·  Rust + egui + wgpu", env!("CARGO_PKG_VERSION"))).weak());
-            ui.label(egui::RichText::new(tr("about.based")).weak());
-            ui.add_space(4.0);
-            ui.separator();
-            ui.label(egui::RichText::new(tr("about.formats")).strong());
-            ui.add(egui::Label::new(Format::ALL.iter().map(|f| f.name()).collect::<Vec<_>>().join("  ·  ")).extend());
-            ui.label(egui::RichText::new(tr("about.readonly")).weak().small());
-            ui.add(egui::Label::new(Format::READ_ONLY.iter().filter(|f| **f != Format::Palette).map(|f| f.name()).collect::<Vec<_>>().join("  ·  ")).extend());
-            ui.label(egui::RichText::new(tr("about.palettes")).weak().small());
-            ui.label("PAL  ·  ACT  ·  GPL  ·  KPL  ·  HEX");
-            ui.add_space(4.0);
-            ui.separator();
-            ui.label(egui::RichText::new(tr("about.keys_title")).strong());
-            ui.label(tr("about.keys"));
-        });
         self.show_about = open;
     }
 
@@ -1068,97 +1655,39 @@ impl App {
     }
 }
 
-type PropSections = Vec<(String, Vec<(String, String)>)>;
-
-/// Toutes les propriétés affichées dans le panneau (sections, image courante, palette), textes traduits.
-fn collect_props(pic: &Picture, dir: usize, frame: usize) -> PropSections {
-    let mut out: PropSections = Vec::new();
-    for sec in &pic.sections {
-        let rows = sec
-            .items
-            .iter()
-            .map(|p| (tr(&p.key), if p.value.starts_with("p.") || p.value.starts_with("c.") { tr(&p.value) } else { p.value.clone() }))
-            .collect();
-        out.push((tr(&sec.title), rows));
+/// Curseur à dégradé : `value` entre 0 et 1, `track(t)` donne la couleur du dégradé en `t`. Renvoie vrai si la valeur change.
+fn gradient_slider(ui: &mut Ui, value: &mut f32, width: f32, track: impl Fn(f32) -> Color32) -> bool {
+    const HANDLE: f32 = 9.0;
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click_and_drag());
+    // La barre est rentrée du rayon de la poignée : la poignée ne dépasse jamais de la zone du curseur.
+    let bar = Rect::from_min_max(pos2(rect.left() + HANDLE, rect.center().y - 5.5), pos2(rect.right() - HANDLE, rect.center().y + 5.5));
+    let mut changed = false;
+    if (resp.dragged() || resp.clicked())
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        *value = ((p.x - bar.left()) / bar.width()).clamp(0.0, 1.0);
+        changed = true;
     }
-    if pic.frames.len() > 1 {
-        let f = &pic.frames[pic.frame_index(dir, frame)];
-        let mut rows = Vec::new();
-        if pic.directions > 1 {
-            rows.push((tr("p.direction"), format!("{} / {}", dir + 1, pic.directions)));
-        }
-        rows.push((tr("a.frame"), format!("{} / {}", frame + 1, pic.dir_len(dir))));
-        rows.push((tr("p.dimensions"), format!("{} × {}", f.width, f.height)));
-        rows.push((tr("p.offset"), format!("{}, {}", f.pos.0, f.pos.1)));
-        if let Some(d) = f.delay_ms {
-            rows.push((tr("p.delay"), format!("{d} ms")));
-        }
-        out.push((tr("sec.current"), rows));
-    }
-    if let Some(pal) = pic.palette.as_ref().or(pic.colors.as_ref()) {
-        let rows = (0..256).filter(|&i| pal.used[i]).map(|i| (i.to_string(), format!("#{:02X}{:02X}{:02X}", pal.colors[i][0], pal.colors[i][1], pal.colors[i][2]))).collect();
-        out.push((tr("sec.palette"), rows));
-    }
-    out
-}
-
-fn props_text(sections: &PropSections) -> String {
-    let mut s = String::new();
-    for (title, rows) in sections {
-        if !s.is_empty() {
-            s.push('\n');
-        }
-        s += &format!("[{title}]\n");
-        for (k, v) in rows {
-            s += &format!("{k}: {v}\n");
+    let n = 48u32;
+    let mut mesh = egui::Mesh::default();
+    for i in 0..=n {
+        let t = i as f32 / n as f32;
+        let x = bar.left() + t * bar.width();
+        let col = track(t);
+        mesh.colored_vertex(pos2(x, bar.top()), col);
+        mesh.colored_vertex(pos2(x, bar.bottom()), col);
+        if i > 0 {
+            let k = i * 2;
+            mesh.add_triangle(k - 2, k - 1, k);
+            mesh.add_triangle(k - 1, k + 1, k);
         }
     }
-    s
-}
-
-fn json_str(v: &str) -> String {
-    let mut o = String::with_capacity(v.len() + 2);
-    o.push('"');
-    for ch in v.chars() {
-        match ch {
-            '"' => o.push_str("\\\""),
-            '\\' => o.push_str("\\\\"),
-            '\n' => o.push_str("\\n"),
-            '\r' => o.push_str("\\r"),
-            '\t' => o.push_str("\\t"),
-            c if (c as u32) < 0x20 => o.push_str(&format!("\\u{:04x}", c as u32)),
-            c => o.push(c),
-        }
-    }
-    o.push('"');
-    o
-}
-
-/// Clé unique dans un objet JSON : un doublon reçoit le suffixe « (2) », « (3) »…
-fn unique_key(used: &mut Vec<String>, k: &str) -> String {
-    let mut name = k.to_string();
-    let mut n = 2;
-    while used.contains(&name) {
-        name = format!("{k} ({n})");
-        n += 1;
-    }
-    used.push(name.clone());
-    name
-}
-
-fn props_json(sections: &PropSections) -> String {
-    let mut titles: Vec<String> = Vec::new();
-    let mut o = String::from("{\n");
-    for (si, (title, rows)) in sections.iter().enumerate() {
-        o += &format!("  {}: {{\n", json_str(&unique_key(&mut titles, title)));
-        let mut keys: Vec<String> = Vec::new();
-        for (ri, (k, v)) in rows.iter().enumerate() {
-            o += &format!("    {}: {}{}\n", json_str(&unique_key(&mut keys, k)), json_str(v), if ri + 1 < rows.len() { "," } else { "" });
-        }
-        o += if si + 1 < sections.len() { "  },\n" } else { "  }\n" };
-    }
-    o.push('}');
-    o
+    ui.painter().add(egui::Shape::mesh(mesh));
+    ui.painter().rect_stroke(bar, 5.0, Stroke::new(1.0, Color32::from_white_alpha(45)), egui::StrokeKind::Outside);
+    let c = pos2(bar.left() + *value * bar.width(), bar.center().y);
+    ui.painter().circle_filled(c, HANDLE, track(*value));
+    ui.painter().circle_stroke(c, HANDLE, Stroke::new(2.5, Color32::WHITE));
+    changed
 }
 
 fn palette_grid(ui: &mut Ui, pal: &Palette) {
@@ -1181,7 +1710,22 @@ fn palette_grid(ui: &mut Ui, pal: &Palette) {
         if x < 16 && y < 16 {
             let i = y * 16 + x;
             let c = pal.colors[i];
-            resp.on_hover_text(format!("#{i}   RGB {}, {}, {}   #{:02X}{:02X}{:02X}{}", c[0], c[1], c[2], c[0], c[1], c[2], if !pal.used[i] { "  (unused)" } else if c[3] == 0 { "  (transparent)" } else { "" }));
+            resp.on_hover_text(format!(
+                "#{i}   RGB {}, {}, {}   #{:02X}{:02X}{:02X}{}",
+                c[0],
+                c[1],
+                c[2],
+                c[0],
+                c[1],
+                c[2],
+                if !pal.used[i] {
+                    "  (unused)"
+                } else if c[3] == 0 {
+                    "  (transparent)"
+                } else {
+                    ""
+                }
+            ));
         }
     }
 }

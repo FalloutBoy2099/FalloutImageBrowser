@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop, clippy::type_complexity, clippy::too_many_arguments)]
 //! Lecture des formats en lecture seule (PSD, PDN, XCF, KRA, ORA) à partir de fichiers fabriqués par les tests.
 
 use fallout_image_browser::formats::{self, DecodeCtx};
@@ -36,9 +37,7 @@ fn gradient(w: usize, h: usize) -> Vec<u8> {
 
 fn png(w: usize, h: usize, rgba: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
-    image::codecs::png::PngEncoder::new(&mut out)
-        .write_image_compat(rgba, w as u32, h as u32)
-        .unwrap();
+    image::codecs::png::PngEncoder::new(&mut out).write_image_compat(rgba, w as u32, h as u32).unwrap();
     out
 }
 
@@ -568,26 +567,26 @@ fn real_psd_folder() {
                 Ok(pic) => {
                     ok += 1;
                     let png_path = p.with_extension("png");
-                    if let Ok(pb) = std::fs::read(&png_path) {
-                        if let Ok(img) = image::load_from_memory(&pb) {
-                            let img = img.to_rgba8();
-                            let f = &pic.frames[0];
-                            if (img.width(), img.height()) == (f.width, f.height) {
-                                let a = rgba_of(&pic);
-                                let (mut sum, mut n) = (0u64, 0u64);
-                                for (x, y) in a.chunks_exact(4).zip(img.as_raw().chunks_exact(4)) {
-                                    if x[3] > 0 && y[3] > 0 {
-                                        for c in 0..3 {
-                                            sum += (x[c] as i32 - y[c] as i32).unsigned_abs() as u64;
-                                            n += 1;
-                                        }
+                    if let Ok(pb) = std::fs::read(&png_path)
+                        && let Ok(img) = image::load_from_memory(&pb)
+                    {
+                        let img = img.to_rgba8();
+                        let f = &pic.frames[0];
+                        if (img.width(), img.height()) == (f.width, f.height) {
+                            let a = rgba_of(&pic);
+                            let (mut sum, mut n) = (0u64, 0u64);
+                            for (x, y) in a.chunks_exact(4).zip(img.as_raw().chunks_exact(4)) {
+                                if x[3] > 0 && y[3] > 0 {
+                                    for c in 0..3 {
+                                        sum += (x[c] as i32 - y[c] as i32).unsigned_abs() as u64;
+                                        n += 1;
                                     }
                                 }
-                                cmp += 1;
-                                let avg = sum as f64 / n.max(1) as f64;
-                                if avg > 6.0 {
-                                    bad.push(format!("{} : écart moyen {avg:.1}", p.display()));
-                                }
+                            }
+                            cmp += 1;
+                            let avg = sum as f64 / n.max(1) as f64;
+                            if avg > 6.0 {
+                                bad.push(format!("{} : écart moyen {avg:.1}", p.display()));
                             }
                         }
                     }

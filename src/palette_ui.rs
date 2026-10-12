@@ -39,10 +39,13 @@ impl App {
             let ex = palette_export::extract(&loaded.pic, self.pal_dlg.fmt == PalFormat::FalloutPal);
             (0..256).filter(|&i| ex.palette.used[i] && ex.palette.colors[i][3] > 0).count()
         });
-        let modal = egui::Modal::new(egui::Id::new("palette_modal")).show(ctx, |ui| {
-            ui.set_width(420.0);
-            ui.heading(tr("x.title"));
-            ui.label(egui::RichText::new(loaded.path.display().to_string()).weak().small());
+        let modal = egui::Modal::new(egui::Id::new("palette_modal")).frame(crate::dialog::frame(ctx)).show(ctx, |ui| {
+            ui.set_width(480.0);
+            crate::dialog::setup(ui);
+            if crate::dialog::title(ui, &tr("x.title")) {
+                close = true;
+            }
+            ui.label(egui::RichText::new(loaded.path.display().to_string()).weak());
             ui.add_space(6.0);
             egui::Grid::new("pal_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
                 ui.label(tr("x.format"));
@@ -63,10 +66,10 @@ impl App {
             }
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button(tr("x.save")).clicked() {
+                if crate::dialog::button(ui, tr("x.save")).clicked() {
                     save = true;
                 }
-                if ui.button(tr("c.cancel")).clicked() {
+                if crate::dialog::button(ui, tr("c.cancel")).clicked() {
                     close = true;
                 }
             });
@@ -93,10 +96,10 @@ impl App {
                         self.pal_dlg.open = false;
                         self.toast(trf("x.done", &[("file", file)]));
                         // Rafraîchit la liste si le fichier est écrit dans le dossier courant.
-                        if let (Some(dir), Some(sel)) = (path.parent(), self.tree.selected_dir.clone()) {
-                            if dir == sel {
-                                self.reload_dir_keep_view();
-                            }
+                        if let (Some(dir), Some(sel)) = (path.parent(), self.tree.selected_dir.clone())
+                            && dir == sel
+                        {
+                            self.reload_dir_keep_view();
                         }
                     }
                     Err(e) => self.pal_dlg.error = Some(e.to_string()),

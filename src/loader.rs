@@ -46,8 +46,18 @@ pub struct Done {
     pub result: Result<Arc<Loaded>, String>,
 }
 
+/// Nombre maximal de préchargements décodés en même temps : les demandes urgentes gardent toujours un thread libre, et la
+/// mémoire reste raisonnable quand les images voisines sont très grandes.
+const MAX_PREFETCH: usize = 2;
+
+struct State {
+    jobs: VecDeque<Job>,
+    /// Préchargements en cours de décodage.
+    prefetching: usize,
+}
+
 struct Queue {
-    items: Mutex<VecDeque<Job>>,
+    items: Mutex<State>,
     cv: Condvar,
 }
 
@@ -58,7 +68,7 @@ pub struct Loader {
 
 impl Loader {
     pub fn new(ctx: eframe::egui::Context) -> Loader {
-        let q = Arc::new(Queue { items: Mutex::new(VecDeque::new()), cv: Condvar::new() });
+        let q = Arc::new(Queue { items: Mutex::new(State { jobs: VecDeque::new(), prefetching: 0 }), cv: Condvar::new() });
         let (tx, rx) = channel::<Done>();
         let n = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).clamp(2, 4);
         for _ in 0..n {
@@ -70,7 +80,13 @@ impl Loader {
                     let job = {
                         let mut g = q.items.lock().unwrap();
                         loop {
-                            if let Some(j) = g.pop_front() {
+                            // Premier travail éligible : un préchargement n'est pris que s'il reste de la place.
+                            let free = g.prefetching < MAX_PREFETCH;
+                            if let Some(i) = g.jobs.iter().position(|j| !j.prefetch || free) {
+                                let j = g.jobs.remove(i).unwrap();
+                                if j.prefetch {
+                                    g.prefetching += 1;
+                                }
                                 break j;
                             }
                             g = q.cv.wait(g).unwrap();
@@ -79,6 +95,10 @@ impl Loader {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| load_file(&job.path, &job.policy)))
                         .unwrap_or_else(|_| Err("erreur interne lors du décodage".to_string()))
                         .map(Arc::new);
+                    if job.prefetch {
+                        q.items.lock().unwrap().prefetching -= 1;
+                        q.cv.notify_all();
+                    }
                     if tx.send(Done { path: job.path, prefetch: job.prefetch, result }).is_err() {
                         return;
                     }
@@ -92,17 +112,17 @@ impl Loader {
     /// Demande urgente : passe devant les préchargements.
     pub fn request(&self, path: PathBuf, policy: PalPolicy) {
         let mut g = self.q.items.lock().unwrap();
-        g.retain(|j| !j.prefetch && j.path != path);
-        g.push_front(Job { path, policy, prefetch: false });
+        g.jobs.retain(|j| !j.prefetch && j.path != path);
+        g.jobs.push_front(Job { path, policy, prefetch: false });
         self.q.cv.notify_one();
     }
 
     pub fn prefetch(&self, paths: Vec<PathBuf>, policy: &PalPolicy) {
         let mut g = self.q.items.lock().unwrap();
-        g.retain(|j| !j.prefetch);
+        g.jobs.retain(|j| !j.prefetch);
         for p in paths {
-            if !g.iter().any(|j| j.path == p) {
-                g.push_back(Job { path: p, policy: policy.clone(), prefetch: true });
+            if !g.jobs.iter().any(|j| j.path == p) {
+                g.jobs.push_back(Job { path: p, policy: policy.clone(), prefetch: true });
             }
         }
         self.q.cv.notify_all();

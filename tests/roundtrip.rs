@@ -51,7 +51,7 @@ fn modes() -> Vec<(Format, DepthChoice, String)> {
 }
 
 fn opts(f: Format, d: DepthChoice) -> ConvertOptions {
-    ConvertOptions { format: f, depth: d, dither: false, bg: [0, 0, 0], enc: EncodeOpts::default() }
+    ConvertOptions { format: f, depth: d, dither: false, bg: [0, 0, 0], enc: EncodeOpts::default(), ops: Default::default() }
 }
 
 #[test]

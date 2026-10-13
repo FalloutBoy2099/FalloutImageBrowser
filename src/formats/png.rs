@@ -115,12 +115,17 @@ fn decode_static(data: &[u8]) -> Result<Picture> {
     Ok(pic)
 }
 
-pub fn encode(p: &Prepared) -> Result<Vec<u8>> {
+pub fn encode(p: &Prepared, opts: &super::EncodeOpts) -> Result<Vec<u8>> {
     let f = p.first();
     let mut out = Vec::new();
     {
         let mut enc = pngc::Encoder::new(&mut out, f.width, f.height);
         enc.set_depth(pngc::BitDepth::Eight);
+        enc.set_compression(match opts.png_level {
+            super::PngLevel::Fast => pngc::Compression::Fast,
+            super::PngLevel::Normal => pngc::Compression::Balanced,
+            super::PngLevel::Best => pngc::Compression::High,
+        });
         match (&f.data, &p.palette) {
             (OutData::Indexed(idx), Some(pal)) => {
                 enc.set_color(pngc::ColorType::Indexed);

@@ -27,16 +27,18 @@ pub fn ordered_files<'a>(files: &'a [FileEntry], sort: SortKey, descending: bool
     let f = filter.trim().to_lowercase();
     let ext = |e: &FileEntry| Path::new(&e.name).extension().map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_default();
     let mut v: Vec<&FileEntry> = files.iter().filter(|e| f.is_empty() || e.name.to_lowercase().contains(&f)).collect();
-    v.sort_by(|a, b| {
-        let by_name = natural_cmp(&a.name, &b.name);
-        let o = match sort {
-            SortKey::Name => by_name,
-            SortKey::Size => a.size.cmp(&b.size).then(by_name),
-            SortKey::Modified => a.modified.cmp(&b.modified).then(by_name),
-            SortKey::Type => ext(a).cmp(&ext(b)).then(by_name),
-        };
-        if descending { o.reverse() } else { o }
-    });
+    let dir = |o: Ordering| if descending { o.reverse() } else { o };
+    match sort {
+        SortKey::Name => v.sort_by(|a, b| dir(natural_cmp(&a.name, &b.name))),
+        SortKey::Size => v.sort_by(|a, b| dir(a.size.cmp(&b.size).then_with(|| natural_cmp(&a.name, &b.name)))),
+        SortKey::Modified => v.sort_by(|a, b| dir(a.modified.cmp(&b.modified).then_with(|| natural_cmp(&a.name, &b.name)))),
+        SortKey::Type => {
+            // L'extension est calculée une seule fois par fichier, pas à chaque comparaison.
+            let mut keyed: Vec<(String, &FileEntry)> = v.into_iter().map(|e| (ext(e), e)).collect();
+            keyed.sort_by(|a, b| dir(a.0.cmp(&b.0).then_with(|| natural_cmp(&a.1.name, &b.1.name))));
+            v = keyed.into_iter().map(|(_, e)| e).collect();
+        }
+    }
     v
 }
 
@@ -78,58 +80,48 @@ pub struct Tree {
     pub rev: u64,
 }
 
+/// Ordre « naturel » sans tenir compte de la casse : `img2` avant `img10`. Aucune allocation (le tri d'un dossier de milliers de
+/// fichiers l'appelle des centaines de milliers de fois).
 pub fn natural_cmp(a: &str, b: &str) -> Ordering {
-    let (a, b) = (a.to_lowercase(), b.to_lowercase());
-    let (mut ia, mut ib) = (a.chars().peekable(), b.chars().peekable());
+    let lower = |c: char| c.to_lowercase().next().unwrap_or(c);
+    let (mut i, mut j) = (0usize, 0usize);
     loop {
-        match (ia.peek().copied(), ib.peek().copied()) {
+        match (a[i..].chars().next(), b[j..].chars().next()) {
             (None, None) => return Ordering::Equal,
             (None, _) => return Ordering::Less,
             (_, None) => return Ordering::Greater,
             (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
-                let mut na = String::new();
-                let mut nb = String::new();
-                while let Some(&c) = ia.peek() {
-                    if c.is_ascii_digit() {
-                        na.push(c);
-                        ia.next();
-                    } else {
-                        break;
-                    }
-                }
-                while let Some(&c) = ib.peek() {
-                    if c.is_ascii_digit() {
-                        nb.push(c);
-                        ib.next();
-                    } else {
-                        break;
-                    }
-                }
-                let (ta, tb) = (na.trim_start_matches('0'), nb.trim_start_matches('0'));
+                // Deux suites de chiffres : comparées comme des nombres (zéros de tête ignorés).
+                let ea = i + a[i..].bytes().take_while(u8::is_ascii_digit).count();
+                let eb = j + b[j..].bytes().take_while(u8::is_ascii_digit).count();
+                let (ta, tb) = (a[i..ea].trim_start_matches('0'), b[j..eb].trim_start_matches('0'));
                 let o = ta.len().cmp(&tb.len()).then_with(|| ta.cmp(tb));
                 if o != Ordering::Equal {
                     return o;
                 }
+                (i, j) = (ea, eb);
             }
             (Some(x), Some(y)) => {
-                if x != y {
-                    return x.cmp(&y);
+                let (lx, ly) = (lower(x), lower(y));
+                if lx != ly {
+                    return lx.cmp(&ly);
                 }
-                ia.next();
-                ib.next();
+                i += x.len_utf8();
+                j += y.len_utf8();
             }
         }
     }
 }
 
 #[cfg(windows)]
-fn is_hidden(p: &Path) -> bool {
+fn is_hidden(e: &std::fs::DirEntry) -> bool {
     use std::os::windows::fs::MetadataExt;
-    std::fs::metadata(p).map(|m| m.file_attributes() & 0x2 != 0 || m.file_attributes() & 0x4 != 0).unwrap_or(false)
+    // Les attributs viennent de la lecture du dossier : pas d'appel système supplémentaire par entrée.
+    e.metadata().map(|m| m.file_attributes() & 0x2 != 0 || m.file_attributes() & 0x4 != 0).unwrap_or(false)
 }
 #[cfg(not(windows))]
-fn is_hidden(p: &Path) -> bool {
-    p.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false)
+fn is_hidden(e: &std::fs::DirEntry) -> bool {
+    e.file_name().to_string_lossy().starts_with('.')
 }
 
 #[cfg(windows)]
@@ -183,7 +175,7 @@ impl DirNode {
             let name = e.file_name().to_string_lossy().to_string();
             let Ok(ft) = e.file_type() else { continue };
             if ft.is_dir() || (ft.is_symlink() && p.is_dir()) {
-                if name.starts_with('$') || name == "System Volume Information" || is_hidden(&p) {
+                if name.starts_with('$') || name == "System Volume Information" || is_hidden(&e) {
                     continue;
                 }
                 self.children.push(DirNode::new(p, name));
@@ -348,15 +340,16 @@ impl DirNode {
         }
     }
 
-    fn expand_all(&mut self, budget: &mut usize) {
+    fn expand_all(&mut self, budget: &mut usize, deadline: std::time::Instant) {
         self.load();
         self.expanded = true;
         for c in &mut self.children {
-            if *budget == 0 {
+            // Plafond de dossiers et de temps : la lecture a lieu dans le thread de l'interface (disque lent, dossier réseau).
+            if *budget == 0 || std::time::Instant::now() > deadline {
                 return;
             }
             *budget -= 1;
-            c.expand_all(budget);
+            c.expand_all(budget, deadline);
         }
     }
 
@@ -396,7 +389,7 @@ impl Tree {
     pub fn expand_all(&mut self, path: &Path) {
         let mut budget = 20_000usize;
         if let Some(node) = Self::find_mut(&mut self.roots, path) {
-            node.expand_all(&mut budget);
+            node.expand_all(&mut budget, std::time::Instant::now() + std::time::Duration::from_secs(3));
         }
         self.rebuild();
     }

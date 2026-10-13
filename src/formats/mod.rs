@@ -87,14 +87,52 @@ impl Prepared {
     }
 }
 
+/// Niveau de compression d'un PNG : le niveau « normal » peut prendre plusieurs secondes sur une grande photo.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PngLevel {
+    /// Rapide : fichier nettement plus gros sur une photo, quasi identique sur une illustration.
+    Fast,
+    #[default]
+    Normal,
+    /// Maximum : le plus lent, fichier un peu plus petit.
+    Best,
+}
+
+impl PngLevel {
+    pub const ALL: [PngLevel; 3] = [PngLevel::Fast, PngLevel::Normal, PngLevel::Best];
+
+    /// Clé de traduction.
+    pub fn key(self) -> &'static str {
+        match self {
+            PngLevel::Fast => "c.png_fast",
+            PngLevel::Normal => "c.png_normal",
+            PngLevel::Best => "c.png_best",
+        }
+    }
+
+    /// Nom utilisé en ligne de commande.
+    pub fn name(self) -> &'static str {
+        match self {
+            PngLevel::Fast => "fast",
+            PngLevel::Normal => "normal",
+            PngLevel::Best => "best",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<PngLevel> {
+        PngLevel::ALL.into_iter().find(|l| l.name().eq_ignore_ascii_case(s))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EncodeOpts {
     pub jpeg_quality: u8,
+    pub png_level: PngLevel,
 }
 
 impl Default for EncodeOpts {
     fn default() -> Self {
-        EncodeOpts { jpeg_quality: 92 }
+        EncodeOpts { jpeg_quality: 92, png_level: PngLevel::Normal }
     }
 }
 
@@ -262,7 +300,7 @@ pub fn encode(prep: &Prepared, opts: &EncodeOpts) -> Result<Vec<u8>> {
         Format::Gif => gif::encode(prep),
         Format::Jpeg => jpeg::encode(prep, opts),
         Format::Pcx => pcx::encode(prep),
-        Format::Png => png::encode(prep),
+        Format::Png => png::encode(prep, opts),
         Format::Rix => rix::encode(prep),
         Format::Tiff => tiff::encode(prep),
         Format::Tga => tga::encode(prep),

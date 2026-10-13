@@ -1,5 +1,7 @@
 //! Modèle de données commun à tous les formats.
 
+use rayon::prelude::*;
+use std::borrow::Cow;
 use std::path::Path;
 
 /// Palette de 256 entrées RGBA. `alpha == 0` = entrée transparente.
@@ -334,12 +336,29 @@ pub fn frame_to_rgba(frame: &Frame, palette: Option<&Palette>) -> Vec<u8> {
                     lut[i] = [i as u8, i as u8, i as u8, 255];
                 }
             }
-            let mut out = Vec::with_capacity(idx.len() * 4);
-            for &i in idx {
-                out.extend_from_slice(&lut[i as usize]);
+            let mut out = vec![0u8; idx.len() * 4];
+            // Les grandes images sont converties en parallèle, par blocs.
+            const BLOCK: usize = 1 << 16;
+            let fill = |dst: &mut [u8], src: &[u8]| {
+                for (d, &i) in dst.chunks_exact_mut(4).zip(src) {
+                    d.copy_from_slice(&lut[i as usize]);
+                }
+            };
+            if idx.len() < 4 * BLOCK {
+                fill(&mut out, idx);
+            } else {
+                out.par_chunks_mut(BLOCK * 4).zip(idx.par_chunks(BLOCK)).for_each(|(d, s)| fill(d, s));
             }
             out
         }
+    }
+}
+
+/// Comme `frame_to_rgba`, sans copie quand l'image est déjà en RGBA.
+pub fn frame_to_rgba_cow<'a>(frame: &'a Frame, palette: Option<&Palette>) -> Cow<'a, [u8]> {
+    match &frame.pixels {
+        Pixels::Rgba(v) => Cow::Borrowed(v),
+        Pixels::Indexed(_) => Cow::Owned(frame_to_rgba(frame, palette)),
     }
 }
 

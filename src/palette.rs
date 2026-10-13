@@ -1,9 +1,10 @@
 //! Palettes Fallout (.PAL), quantification et diffusion d'erreur.
 
+use crate::imageops::DitherMethod;
 use crate::model::Palette;
 use anyhow::{Result, bail};
 use rayon::prelude::*;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 static DEFAULT_PAL: &[u8] = include_bytes!("../assets/default.pal");
 
@@ -93,6 +94,25 @@ impl Mapper {
         Ok(Mapper { lut, transparent })
     }
 
+    /// Comme `new`, mais réutilise la table déjà calculée pour la même palette : la construire coûte ~16 ms, ce qui domine la
+    /// conversion d'un lot de petites images vers une palette fixe (Fallout, .PAL choisie).
+    pub fn shared(pal: &Palette, transparent: Option<u8>, grid_aligned: bool) -> Result<Arc<Mapper>> {
+        type Key = (Palette, Option<u8>, bool);
+        static CACHE: OnceLock<Mutex<Vec<(Key, Arc<Mapper>)>>> = OnceLock::new();
+        let cache = CACHE.get_or_init(|| Mutex::new(Vec::new()));
+        let key: Key = (pal.clone(), transparent, grid_aligned);
+        if let Some((_, m)) = cache.lock().unwrap().iter().find(|(k, _)| *k == key) {
+            return Ok(m.clone());
+        }
+        let m = Arc::new(Mapper::new(pal, transparent, grid_aligned)?);
+        let mut c = cache.lock().unwrap();
+        if c.len() >= 4 {
+            c.remove(0);
+        }
+        c.push((key, m.clone()));
+        Ok(m)
+    }
+
     #[inline]
     pub fn nearest(&self, r: u8, g: u8, b: u8) -> u8 {
         self.lut[((r as usize >> 2) << 12) | ((g as usize >> 2) << 6) | (b as usize >> 2)]
@@ -135,8 +155,45 @@ pub fn flatten_palette(p: &Palette, bg: [u8; 3]) -> Palette {
 /// Les pixels dont alpha < 128 deviennent `mapper.transparent` s'il existe (sinon ils doivent
 /// avoir été aplatis au préalable).
 pub fn quantize_rgba(rgba: &[u8], w: usize, h: usize, pal: &Palette, mapper: &Mapper, dither: bool) -> Vec<u8> {
+    quantize_rgba_with(rgba, w, h, pal, mapper, dither.then_some(DitherMethod::FloydSteinberg))
+}
+
+/// Matrice de Bayer 8 × 8 (valeurs de 0 à 63).
+const BAYER8: [[u8; 8]; 8] = [
+    [0, 32, 8, 40, 2, 34, 10, 42],
+    [48, 16, 56, 24, 50, 18, 58, 26],
+    [12, 44, 4, 36, 14, 46, 6, 38],
+    [60, 28, 52, 20, 62, 30, 54, 22],
+    [3, 35, 11, 43, 1, 33, 9, 41],
+    [51, 19, 59, 27, 49, 17, 57, 25],
+    [15, 47, 7, 39, 13, 45, 5, 37],
+    [63, 31, 55, 23, 61, 29, 53, 21],
+];
+
+/// Amplitude (en niveaux par composante) du tramage ordonné : les palettes de Fallout sont peu denses, d'où une valeur assez large.
+const BAYER_SPREAD: i32 = 40;
+
+/// Comme `quantize_rgba`, avec le choix de la méthode de tramage (`None` : aucune).
+pub fn quantize_rgba_with(rgba: &[u8], w: usize, h: usize, pal: &Palette, mapper: &Mapper, dither: Option<DitherMethod>) -> Vec<u8> {
     let mut out = vec![0u8; w * h];
-    if !dither {
+    if dither == Some(DitherMethod::Bayer) {
+        out.par_chunks_mut(w.max(1)).enumerate().for_each(|(y, row)| {
+            for x in 0..w {
+                let p = &rgba[(y * w + x) * 4..(y * w + x) * 4 + 4];
+                row[x] = match mapper.transparent {
+                    Some(t) if p[3] < 128 => t,
+                    _ => {
+                        let off = ((BAYER8[y % 8][x % 8] as i32 * 2 + 1 - 64) * BAYER_SPREAD) / 128;
+                        let c = |v: u8| (v as i32 + off).clamp(0, 255) as u8;
+                        mapper.nearest(c(p[0]), c(p[1]), c(p[2]))
+                    }
+                };
+            }
+        });
+        let _ = pal;
+        return out;
+    }
+    if dither.is_none() {
         out.par_chunks_mut(w.max(1)).enumerate().for_each(|(y, row)| {
             for x in 0..w {
                 let p = &rgba[(y * w + x) * 4..(y * w + x) * 4 + 4];

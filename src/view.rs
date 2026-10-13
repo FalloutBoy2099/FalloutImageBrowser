@@ -2,6 +2,8 @@
 //! lecture d'un pixel.
 
 use crate::model::*;
+use rayon::prelude::*;
+use std::borrow::Cow;
 
 /// Taille logique (canevas commun d'une direction pour les animations).
 pub fn canvas_size(pic: &Picture, dir: usize) -> (u32, u32) {
@@ -28,9 +30,15 @@ fn canvas_offset(pic: &Picture, dir: usize, frame: &Frame) -> (i32, i32) {
 
 /// Pixels RGBA du canevas de la direction `dir` pour l'image `f` : (largeur, hauteur, pixels).
 pub fn render_rgba(pic: &Picture, dir: usize, f: usize) -> (usize, usize, Vec<u8>) {
+    let (w, h, rgba) = render_rgba_cow(pic, dir, f);
+    (w, h, rgba.into_owned())
+}
+
+/// Comme `render_rgba`, sans copier les pixels d'une image RGBA qui remplit déjà le canevas.
+pub fn render_rgba_cow(pic: &Picture, dir: usize, f: usize) -> (usize, usize, Cow<'_, [u8]>) {
     let frame = &pic.frames[pic.frame_index(dir, f)];
     let (cw, ch) = canvas_size(pic, dir);
-    let rgba = frame_to_rgba(frame, pic.palette.as_ref());
+    let rgba = frame_to_rgba_cow(frame, pic.palette.as_ref());
     if pic.frames_per_dir <= 1 || (cw == frame.width && ch == frame.height) {
         return (frame.width as usize, frame.height as usize, rgba);
     }
@@ -46,7 +54,107 @@ pub fn render_rgba(pic: &Picture, dir: usize, f: usize) -> (usize, usize, Vec<u8
             canvas[dst..dst + n].copy_from_slice(&rgba[src..src + n]);
         }
     }
-    (cw, ch, canvas)
+    (cw, ch, Cow::Owned(canvas))
+}
+
+// ----------------------------------------------------------------------------- toutes les directions côte à côte
+
+/// Nombre maximal de directions affichées ensemble (au-delà, une grille serait illisible).
+pub const MAX_GRID_DIRS: usize = 16;
+
+/// Peut-on afficher toutes les directions côte à côte ?
+pub fn can_show_all_dirs(pic: &Picture) -> bool {
+    (2..=MAX_GRID_DIRS).contains(&pic.directions)
+}
+
+/// Disposition des directions : une cellule par direction, toutes de la même taille, alignées sur l'origine commune.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DirGrid {
+    pub n: usize,
+    pub cols: usize,
+    pub rows: usize,
+    pub cell_w: u32,
+    pub cell_h: u32,
+    /// Coin haut-gauche de la boîte englobante de toutes les directions (coordonnées de l'origine commune).
+    pub x0: i32,
+    pub y0: i32,
+}
+
+/// Disposition pour l'image : deux rangées dès que l'on dépasse trois directions (3 × 2 pour un FRM de six directions).
+pub fn dir_grid(pic: &Picture) -> DirGrid {
+    let n = pic.directions.max(1);
+    let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for d in 0..n {
+        let b = pic.dir_bounds(d);
+        x0 = x0.min(b.0);
+        y0 = y0.min(b.1);
+        x1 = x1.max(b.2);
+        y1 = y1.max(b.3);
+    }
+    let rows = if n <= 3 { 1 } else { 2 };
+    DirGrid { n, cols: n.div_ceil(rows), rows, cell_w: (x1 - x0).max(1) as u32, cell_h: (y1 - y0).max(1) as u32, x0, y0 }
+}
+
+impl DirGrid {
+    /// Taille de l'ensemble.
+    pub fn size(&self) -> (u32, u32) {
+        (self.cols as u32 * self.cell_w, self.rows as u32 * self.cell_h)
+    }
+
+    /// Coin haut-gauche de la cellule de la direction `d`.
+    pub fn cell_origin(&self, d: usize) -> (u32, u32) {
+        ((d % self.cols) as u32 * self.cell_w, (d / self.cols) as u32 * self.cell_h)
+    }
+
+    /// Position de l'origine commune (le point d'ancrage) dans la cellule de la direction `d`.
+    pub fn anchor(&self, d: usize) -> (i32, i32) {
+        let (cx, cy) = self.cell_origin(d);
+        (cx as i32 - self.x0, cy as i32 - self.y0)
+    }
+
+    /// Direction dont la cellule contient le pixel (`x`, `y`) de l'ensemble, avec sa position dans la cellule.
+    pub fn cell_at(&self, x: i32, y: i32) -> Option<(usize, i32, i32)> {
+        let (w, h) = self.size();
+        if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
+            return None;
+        }
+        let (col, row) = (x as usize / self.cell_w as usize, y as usize / self.cell_h as usize);
+        let d = row * self.cols + col;
+        (d < self.n).then(|| (d, x - (col as u32 * self.cell_w) as i32, y - (row as u32 * self.cell_h) as i32))
+    }
+}
+
+/// Pixels RGBA de toutes les directions côte à côte pour l'image `f` (les directions plus courtes restent sur leur dernière
+/// image) : (largeur, hauteur, pixels). Les images sont placées d'après leur position, donc alignées sur l'origine commune.
+pub fn render_all_dirs(pic: &Picture, f: usize) -> (usize, usize, Vec<u8>) {
+    let g = dir_grid(pic);
+    let (w, h) = g.size();
+    let (w, h) = (w as usize, h as usize);
+    let mut out = vec![0u8; w * h * 4];
+    for d in 0..g.n {
+        let frame = &pic.frames[pic.frame_index(d, f.min(pic.dir_len(d).saturating_sub(1)))];
+        let rgba = frame_to_rgba_cow(frame, pic.palette.as_ref());
+        let (ax, ay) = g.anchor(d);
+        let (ox, oy) = (ax + frame.pos.0, ay + frame.pos.1);
+        let (cx, cy) = g.cell_origin(d);
+        for y in 0..frame.height as i32 {
+            let ty = oy + y;
+            // Le dessin reste dans sa cellule.
+            if ty < cy as i32 || ty >= (cy + g.cell_h) as i32 {
+                continue;
+            }
+            let x_from = (cx as i32 - ox).max(0);
+            let x_to = ((cx + g.cell_w) as i32 - ox).min(frame.width as i32);
+            if x_to <= x_from {
+                continue;
+            }
+            let n = (x_to - x_from) as usize * 4;
+            let src = (y as usize * frame.width as usize + x_from as usize) * 4;
+            let dst = (ty as usize * w + (ox + x_from) as usize) * 4;
+            out[dst..dst + n].copy_from_slice(&rgba[src..src + n]);
+        }
+    }
+    (w, h, out)
 }
 
 /// Point d'ancrage (le centre de l'hexagone pour un FRM) dans le canevas de la direction : l'origine commune des
@@ -117,20 +225,57 @@ impl Transform {
 
     /// Pixels RGBA transformés : (pixels, largeur, hauteur).
     pub fn apply(&self, rgba: &[u8], w: usize, h: usize) -> (Vec<u8>, usize, usize) {
+        let (out, tw, th) = self.apply_cow(Cow::Borrowed(rgba), w, h);
+        (out.into_owned(), tw, th)
+    }
+
+    /// Comme `apply`, mais l'image est rendue telle quelle (sans copie) quand la transformation est l'identité ; sinon les
+    /// lignes de l'image transformée sont calculées en parallèle.
+    pub fn apply_cow<'a>(&self, rgba: Cow<'a, [u8]>, w: usize, h: usize) -> (Cow<'a, [u8]>, usize, usize) {
         if self.is_identity() {
-            return (rgba.to_vec(), w, h);
+            return (rgba, w, h);
         }
         let (tw, th) = self.size(w, h);
         let mut out = vec![0u8; tw * th * 4];
-        for ty in 0..th {
+        out.par_chunks_mut((tw * 4).max(4)).enumerate().for_each(|(ty, row)| {
             for tx in 0..tw {
                 let (sx, sy) = self.source_of(tx, ty, w, h);
-                let (s, d) = ((sy * w + sx) * 4, (ty * tw + tx) * 4);
-                out[d..d + 4].copy_from_slice(&rgba[s..s + 4]);
+                let s = (sy * w + sx) * 4;
+                row[tx * 4..tx * 4 + 4].copy_from_slice(&rgba[s..s + 4]);
             }
-        }
-        (out, tw, th)
+        });
+        (Cow::Owned(out), tw, th)
     }
+}
+
+/// Réduit l'image d'un facteur `k` (moyenne des blocs `k` × `k`, pondérée par l'alpha) : (pixels, largeur, hauteur).
+pub fn box_downscale(rgba: &[u8], w: usize, h: usize, k: usize) -> (Vec<u8>, usize, usize) {
+    let (nw, nh) = (w.div_ceil(k), h.div_ceil(k));
+    let mut out = vec![0u8; nw * nh * 4];
+    out.par_chunks_mut((nw * 4).max(4)).enumerate().for_each(|(y, row)| {
+        for x in 0..nw {
+            let (mut r, mut g, mut b, mut a, mut n) = (0u64, 0u64, 0u64, 0u64, 0u64);
+            for yy in y * k..((y + 1) * k).min(h) {
+                for xx in x * k..((x + 1) * k).min(w) {
+                    let p = &rgba[(yy * w + xx) * 4..(yy * w + xx) * 4 + 4];
+                    let al = p[3] as u64;
+                    r += p[0] as u64 * al;
+                    g += p[1] as u64 * al;
+                    b += p[2] as u64 * al;
+                    a += al;
+                    n += 1;
+                }
+            }
+            let o = x * 4;
+            if a > 0 {
+                row[o] = (r / a) as u8;
+                row[o + 1] = (g / a) as u8;
+                row[o + 2] = (b / a) as u8;
+            }
+            row[o + 3] = (a / n.max(1)) as u8;
+        }
+    });
+    (out, nw, nh)
 }
 
 // ----------------------------------------------------------------------------- lecture d'un pixel

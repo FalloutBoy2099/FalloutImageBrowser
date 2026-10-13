@@ -66,7 +66,19 @@ from the specification and checked against test archives.
   the path | copy to…, move to…, rename… (a same-name `.PAL` follows the file; archive items can only be copied) |
   convert image…, export palette… | copy all the information as text, JSON or XML.
 * Right-click on the image: Zoom 100 %, Convert image…. Conversion is a modal window (like every dialog, with a close button at the top right and large buttons) (one image at a time;
-  name, format, depth, output folder = last one used or the source file's folder).
+  name, format, depth, PNG compression level, output folder = last one used or the source file's folder).
+* Conversion options (also on the command line): resize by percentage or to a maximum longest side (never enlarges),
+  smooth (Lanczos, alpha-aware) or pixel-perfect resampling, removal of transparent margins, and a choice of dithering
+  (none, Floyd–Steinberg, ordered Bayer). The window shows the resulting size and an estimate of the file size, computed by
+  really encoding the image in the background.
+* File → *Batch convert…* (Ctrl+B) opens an independent window (the main window stays usable): add files, folders (with or
+  without sub-folders), `.DAT` archives or the current folder, pick the same settings as for one image, write next to each
+  source or into one folder (optionally keeping the sub-folder layout), follow a progress bar, stop at any time and read the
+  list of failures. No existing file is ever overwritten.
+* Image → *Show all directions* (D): the six directions of an FRM (or the directions of an ART) side by side, animated together
+  and aligned on the common origin; click a direction to select it.
+* File → *Edit FRM header…*: frames per second, action frame and the X / Y offset of each direction, saved with *Save as…*;
+  the images are not re-encoded.
 * The zoom level is kept from one image to the next. Animations (FRM, GIF): manual playback by default,
   with an *Autoplay* option in the View menu.
 * Menus: *View* (panels, fit, full screen, slideshow, autoplay, smoothing, remembered window size and position), *Image*
@@ -88,7 +100,7 @@ from the specification and checked against test archives.
 *The Convert window: target format, colour depth, dithering, file name and output folder.*
 
 Shortcuts: Space / → / ↑ next, Backspace / ← / ↓ previous, Home / End, `+` `-` zoom, Enter 100 %,
-`F` fit, `P` play, `T` folder tree, `I` properties, `F5` reload, Ctrl+O open, Ctrl+L current folder, Ctrl+C copy image, Ctrl+E convert.
+`F` fit, `P` play, `D` all directions, `T` folder tree, `I` properties, `F5` reload, Ctrl+O open, Ctrl+L current folder, Ctrl+C copy image, Ctrl+E convert, Ctrl+B batch convert.
 
 ## Command line
 
@@ -107,8 +119,8 @@ fallout_image_browser extract <input> [-o folder] [--overwrite] [-q]       # inp
   **Folder mode**: `<input>` is a folder (or a `.dat` archive, or a folder inside an archive); every image it contains is converted
   (`-r` for sub-folders; always the case for a whole archive, whose tree is kept under `--out`).
 * Options: `-d 8|8f|8p|16|24|32` (`8p` without `--pal` creates the .PAL file), `-p file.pal`,
-  `--read-pal auto|fallout|file`, `-o folder`, `-n name` (file mode), `-r`, `--dither`, `--quality 1-100`,
-  `--bg RRGGBB`, `--direction N`, `--frame N`, `--sequence`, `-q`, `--lang xx`. Every format / depth
+  `--read-pal auto|fallout|file`, `-o folder`, `-n name` (file mode), `-r`, `--dither`, `--dither-method fs|bayer`, `--scale PERCENT`, `--max-size PX`, `--resample smooth|pixel`, `--trim`, `--quality 1-100`,
+  `--png-level fast|normal|best` (PNG compression: `fast` is far quicker on large photos), `--bg RRGGBB`, `--direction N`, `--frame N`, `--sequence`, `-q`, `--lang xx`. Every format / depth
   combination of the GUI is available; see `--help` for details.
 * No existing file is ever overwritten (a `_converted` suffix is added). Exit code: 0 success, 1 partial failure, 2 usage error.
 

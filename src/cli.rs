@@ -2,7 +2,8 @@
 
 use crate::batch::{self, Job};
 use crate::convert::*;
-use crate::formats::{self, EncodeOpts};
+use crate::formats::{self, EncodeOpts, PngLevel};
+use crate::imageops::{DitherMethod, ImageOps, Resample, Resize};
 use crate::loader::{PalPolicy, load_pal_file};
 use crate::model::*;
 use rayon::prelude::*;
@@ -55,8 +56,14 @@ OPTIONS (convert)
   -n, --name <NAME>      output file name without extension (file mode only)
   -r, --recursive        also convert sub-folders; the sub-folder layout is kept under --out
                          (always the case for a whole .DAT archive)
-      --dither           error-diffusion dithering for 8-bit output
+      --dither           dithering for 8-bit output (Floyd-Steinberg unless --dither-method says otherwise)
+      --dither-method <M>  fs (error diffusion, default) or bayer (ordered); implies --dither
+      --scale <PERCENT>  resize to this percentage of the original size (1-1000)
+      --max-size <PX>    shrink so that the longest side is at most PX (never enlarges)
+      --resample <M>     smooth (default, Lanczos) or pixel (nearest neighbour, keeps sharp pixels)
+      --trim             remove the fully transparent margins of each image
       --quality <1-100>  JPEG quality (default 92)
+      --png-level <L>    PNG compression: fast, normal (default) or best; fast is much quicker on large photos
       --bg <RRGGBB>      colour replacing transparency when the format has none (default 000000)
       --direction <N>    direction to export (1-based) for single-image formats (default 1)
       --frame <N>        frame to export (1-based) for single-image formats (default 1)
@@ -110,11 +117,6 @@ pub fn is_cli(args: &[String]) -> bool {
     )
 }
 
-/// Image convertible en mode répertoire (les fichiers de palette sont exclus).
-fn convertible(p: &Path) -> bool {
-    is_supported(p) && Format::from_path(p) != Some(Format::Palette)
-}
-
 fn parse_format(s: &str) -> Option<Format> {
     Format::from_ext(s.trim_start_matches('.')).filter(|f| f.is_writable())
 }
@@ -139,7 +141,12 @@ struct Args {
     name: Option<String>,
     recursive: bool,
     dither: bool,
+    dither_method: DitherMethod,
+    resize: Resize,
+    resample: Resample,
+    trim: bool,
     quality: u8,
+    png_level: PngLevel,
     bg: [u8; 3],
     seq: bool,
     dir: usize,
@@ -159,7 +166,12 @@ fn parse(args: &[String]) -> Result<Args, String> {
         name: None,
         recursive: false,
         dither: false,
+        dither_method: DitherMethod::FloydSteinberg,
+        resize: Resize::None,
+        resample: Resample::Smooth,
+        trim: false,
         quality: 92,
+        png_level: PngLevel::Normal,
         bg: [0, 0, 0],
         seq: false,
         dir: 0,
@@ -184,12 +196,34 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "-n" | "--name" => a.name = Some(val("--name")?),
             "-r" | "--recursive" => a.recursive = true,
             "--dither" => a.dither = true,
+            "--dither-method" => {
+                let v = val("--dither-method")?;
+                a.dither_method = DitherMethod::from_name(&v).ok_or_else(|| format!("--dither-method expects fs or bayer (got {v})"))?;
+                a.dither = true;
+            }
+            "--scale" => {
+                let p = val("--scale")?.trim_end_matches('%').parse::<u32>().ok().filter(|p| (1..=1000).contains(p)).ok_or("--scale expects a percentage from 1 to 1000")?;
+                a.resize = Resize::Percent(p);
+            }
+            "--max-size" => {
+                let n = val("--max-size")?.parse::<u32>().ok().filter(|n| *n >= 1).ok_or("--max-size expects a number of pixels >= 1")?;
+                a.resize = Resize::MaxSide(n);
+            }
+            "--resample" => {
+                let v = val("--resample")?;
+                a.resample = Resample::from_name(&v).ok_or_else(|| format!("--resample expects smooth or pixel (got {v})"))?;
+            }
+            "--trim" => a.trim = true,
             "--sequence" => a.seq = true,
             "-q" | "--quiet" => a.quiet = true,
             "--direction" => a.dir = index(val("--direction")?, "--direction")?,
             "--frame" => a.frame = index(val("--frame")?, "--frame")?,
             "--quality" => {
                 a.quality = val("--quality")?.parse::<u8>().ok().filter(|q| (1..=100).contains(q)).ok_or("quality must be 1-100")?;
+            }
+            "--png-level" => {
+                let v = val("--png-level")?;
+                a.png_level = PngLevel::from_name(&v).ok_or_else(|| format!("--png-level expects fast, normal or best (got {v})"))?;
             }
             "--bg" => {
                 let v = val("--bg")?;
@@ -239,50 +273,6 @@ fn depth_from(spec: &str, pal: &Option<Arc<Palette>>) -> Result<DepthChoice, Str
         "32" => DepthChoice::Rgba32,
         s => return Err(format!("unknown depth: {s} (8, 8f, 8p, 16, 24, 32)")),
     })
-}
-
-/// (chemin source, sous-dossier relatif à conserver sous le dossier de sortie), mode répertoire, depuis une archive
-fn list_inputs(input: &Path, recursive: bool) -> Result<(Vec<(PathBuf, PathBuf)>, bool, bool), String> {
-    // Archive ou dossier virtuel.
-    if let Some((_, inner)) = crate::dat::split(input) {
-        if crate::dat::stat(input) == Some(crate::dat::Stat::Dir) || inner.is_empty() {
-            let whole_archive = inner.is_empty();
-            let v: Vec<_> = crate::dat::walk(input)
-                .into_iter()
-                .filter(|(p, rel)| convertible(p) && (whole_archive || recursive || rel.components().count() == 1))
-                .map(|(p, rel)| {
-                    let parent = rel.parent().map(|r| r.to_path_buf()).unwrap_or_default();
-                    (p, parent)
-                })
-                .collect();
-            return Ok((v, true, true));
-        }
-        return Ok((vec![(input.to_path_buf(), PathBuf::new())], false, true));
-    }
-    if input.is_file() {
-        return Ok((vec![(input.to_path_buf(), PathBuf::new())], false, false));
-    }
-    if input.is_dir() {
-        let mut out = Vec::new();
-        fn walk(dir: &Path, rel: &Path, recursive: bool, out: &mut Vec<(PathBuf, PathBuf)>) {
-            let Ok(rd) = std::fs::read_dir(dir) else { return };
-            let mut entries: Vec<_> = rd.flatten().collect();
-            entries.sort_by_key(|e| e.file_name());
-            for e in entries {
-                let p = e.path();
-                if p.is_dir() {
-                    if recursive {
-                        walk(&p, &rel.join(e.file_name()), recursive, out);
-                    }
-                } else if convertible(&p) {
-                    out.push((p, rel.to_path_buf()));
-                }
-            }
-        }
-        walk(input, Path::new(""), recursive, &mut out);
-        return Ok((out, true, false));
-    }
-    Err(format!("not found: {}", input.display()))
 }
 
 /// Tableau des formats et des profondeurs acceptées.
@@ -525,7 +515,7 @@ Try: {} --help",
             _ => PalPolicy::Auto,
         },
     };
-    let (inputs, dir_mode, from_archive) = match list_inputs(&a.input, a.recursive) {
+    let (inputs, dir_mode, from_archive) = match batch::list_inputs(&a.input, a.recursive) {
         Ok(x) => x,
         Err(e) => {
             eprintln!("error: {e}");
@@ -549,7 +539,18 @@ Try: {} --help",
         }
         _ => None,
     };
-    let job = Job { opts: ConvertOptions { format: a.format, depth, dither: a.dither, bg: a.bg, enc: EncodeOpts { jpeg_quality: a.quality } }, seq: a.seq, policy };
+    let job = Job {
+        opts: ConvertOptions {
+            format: a.format,
+            depth,
+            dither: a.dither,
+            bg: a.bg,
+            enc: EncodeOpts { jpeg_quality: a.quality, png_level: a.png_level },
+            ops: ImageOps { resize: a.resize, resample: a.resample, trim: a.trim, dither_method: a.dither_method },
+        },
+        seq: a.seq,
+        policy,
+    };
     let sel = Selection { dir: a.dir, frame: a.frame };
     let total = inputs.len();
     let counters = Mutex::new((0usize, 0usize));

@@ -544,7 +544,7 @@ fn read_only_formats_cannot_be_written() {
     let pic = Picture::single(Format::Bmp, 8, 8, Pixels::Rgba(g), None);
     for f in Format::READ_ONLY {
         assert!(!f.is_writable());
-        let o = ConvertOptions { format: f, depth: DepthChoice::Rgb24, dither: false, bg: [0; 3], enc: Default::default() };
+        let o = ConvertOptions { format: f, depth: DepthChoice::Rgb24, dither: false, bg: [0; 3], enc: Default::default(), ops: Default::default() };
         assert!(convert_to_bytes(&pic, &o, &Selection::default()).is_err(), "{}", f.name());
     }
     assert!(!Format::ALL.iter().any(|f| Format::READ_ONLY.contains(f)));
@@ -666,7 +666,7 @@ fn animated_gif_has_all_frames_and_delays() {
     use fallout_image_browser::convert::*;
     let data = std::fs::read(sample("fallout/HMJMPSAA.FRM")).expect("_test_files/fallout/HMJMPSAA.FRM");
     let frm = formats::decode(Format::Frm, &data, &ctx()).unwrap();
-    let o = ConvertOptions { format: Format::Gif, depth: DepthChoice::Indexed(PalChoice::Fallout), dither: false, bg: [0; 3], enc: Default::default() };
+    let o = ConvertOptions { format: Format::Gif, depth: DepthChoice::Indexed(PalChoice::Fallout), dither: false, bg: [0; 3], enc: Default::default(), ops: Default::default() };
     let gif = convert_to_bytes(&frm, &o, &Selection { dir: 1, frame: 0 }).unwrap();
     let pic = formats::decode(Format::Gif, &gif, &ctx()).unwrap();
     assert_eq!(pic.frames_per_dir, 12);
@@ -803,7 +803,7 @@ fn qoi_and_pnm_edge_cases() {
         }
     }
     let pic = Picture::single(Format::Bmp, w as u32, h as u32, Pixels::Rgba(px.clone()), None);
-    let o = ConvertOptions { format: Format::Qoi, depth: DepthChoice::Rgba32, dither: false, bg: [0; 3], enc: Default::default() };
+    let o = ConvertOptions { format: Format::Qoi, depth: DepthChoice::Rgba32, dither: false, bg: [0; 3], enc: Default::default(), ops: Default::default() };
     let b = convert_to_bytes(&pic, &o, &Selection::default()).unwrap();
     assert_eq!(rgba_of(&formats::decode(Format::Qoi, &b, &ctx()).unwrap()), px);
     assert_eq!(formats::sniff(&b), Some(Format::Qoi));

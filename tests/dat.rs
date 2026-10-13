@@ -123,7 +123,7 @@ fn create_pal_next_to_image() {
         }
     }
     let pic = Picture::single(Format::Tga, w as u32, h as u32, Pixels::Rgba(v.clone()), None);
-    let o = ConvertOptions { format: Format::Tga, depth: DepthChoice::Rgba32, dither: false, bg: [0, 0, 0], enc: EncodeOpts::default() };
+    let o = ConvertOptions { format: Format::Tga, depth: DepthChoice::Rgba32, dither: false, bg: [0, 0, 0], enc: EncodeOpts::default(), ops: Default::default() };
     std::fs::write(dir.join("src.tga"), convert_to_bytes(&pic, &o, &Selection::default()).unwrap()).unwrap();
     let s = |a: &[&str]| a.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     let out = dir.join("out");

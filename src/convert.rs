@@ -1,6 +1,7 @@
 //! Conversion d'une `Picture` vers l'image prête à encoder (`Prepared`) puis vers un fichier.
 
 use crate::formats::{self, Caps, Depth, EncodeOpts, OutData, OutFrame, Prepared};
+use crate::imageops::{self, ImageOps};
 use crate::model::*;
 use crate::palette::{self, Mapper};
 use anyhow::{Result, bail};
@@ -44,6 +45,8 @@ pub struct ConvertOptions {
     pub dither: bool,
     pub bg: [u8; 3],
     pub enc: EncodeOpts,
+    /// Retouches (taille, marges, méthode de tramage) appliquées avant l'encodage.
+    pub ops: ImageOps,
 }
 
 /// Image / direction à exporter pour les formats à image unique.
@@ -94,6 +97,13 @@ fn to_555(rgba: &mut [u8], keep_alpha: bool) {
 }
 
 pub fn prepare(pic: &Picture, opt: &ConvertOptions, sel: &Selection) -> Result<Prepared> {
+    let retouched;
+    let pic = if opt.ops.is_noop() {
+        pic
+    } else {
+        retouched = imageops::apply_ops(pic, &opt.ops)?;
+        &retouched
+    };
     let caps = formats::caps(opt.format);
     if !depth_supported(&caps, &opt.depth) {
         bail!("profondeur non prise en charge par {}", opt.format.name());
@@ -223,7 +233,7 @@ pub fn prepare(pic: &Picture, opt: &ConvertOptions, sel: &Selection) -> Result<P
                 } else {
                     None
                 };
-                let mapper = Mapper::new(&work, reserved, grid)?;
+                let mapper = if fixed { Mapper::shared(&work, reserved, grid)? } else { Arc::new(Mapper::new(&work, reserved, grid)?) };
                 let remap = if src_indexed {
                     let src_pal = pic.palette.as_ref().unwrap();
                     let sp = if keep_transp { src_pal.clone() } else { palette::flatten_palette(src_pal, opt.bg) };
@@ -248,7 +258,7 @@ pub fn prepare(pic: &Picture, opt: &ConvertOptions, sel: &Selection) -> Result<P
                             if !keep_transp {
                                 composite(&mut rgba, opt.bg);
                             }
-                            OutData::Indexed(palette::quantize_rgba(&rgba, f.width as usize, f.height as usize, &work, &mapper, opt.dither))
+                            OutData::Indexed(palette::quantize_rgba_with(&rgba, f.width as usize, f.height as usize, &work, &mapper, opt.dither.then_some(opt.ops.dither_method)))
                         }
                     };
                     out.frames.push(meta(f, data));

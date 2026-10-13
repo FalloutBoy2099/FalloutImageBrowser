@@ -149,11 +149,13 @@ pub fn walk(dir: &Path) -> Vec<(PathBuf, PathBuf)> {
 
 impl Dat {
     pub fn open(path: &Path) -> Result<Arc<Dat>> {
-        if let Some(d) = cache().lock().unwrap().get(path) {
+        // Le verrou reste pris pendant l'analyse : plusieurs threads qui ouvrent la même archive en même temps ne la lisent qu'une fois.
+        let mut c = cache().lock().unwrap();
+        if let Some(d) = c.get(path) {
             return Ok(d.clone());
         }
         let dat = Arc::new(Dat::parse(path)?);
-        cache().lock().unwrap().insert(path.to_path_buf(), dat.clone());
+        c.insert(path.to_path_buf(), dat.clone());
         Ok(dat)
     }
 

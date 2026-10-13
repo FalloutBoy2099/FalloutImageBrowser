@@ -42,6 +42,8 @@ pub struct Settings {
     pub show_grid: bool,
     pub show_pixel_info: bool,
     pub show_origin: bool,
+    /// Toutes les directions d'un FRM (ou ART) côte à côte.
+    pub show_all_dirs: bool,
     pub onion: bool,
     /// Délai du diaporama en secondes.
     pub slideshow_secs: u32,
@@ -57,6 +59,8 @@ pub struct Settings {
     /// Boutons latéraux de la souris : false = précédente / suivante, true = zoom.
     pub xbtn_zoom: bool,
     pub conv: crate::convert_ui::ConvSettings,
+    /// Conversion par lot (fenêtre indépendante).
+    pub batch: crate::batch_ui::BatchSettings,
     /// Extraction de palette : dernier format (id) et dernier dossier.
     pub pal_fmt: String,
     pub pal_dir: Option<PathBuf>,
@@ -77,6 +81,7 @@ impl Default for Settings {
             show_grid: false,
             show_pixel_info: true,
             show_origin: false,
+            show_all_dirs: false,
             onion: false,
             slideshow_secs: 3,
             last_dir: None,
@@ -87,6 +92,7 @@ impl Default for Settings {
             wheel_nav: false,
             xbtn_zoom: false,
             conv: Default::default(),
+            batch: Default::default(),
             pal_fmt: "pal".to_string(),
             pal_dir: None,
         }
@@ -100,8 +106,15 @@ pub struct RenameDlg {
     pub fresh: bool,
 }
 
+/// Taille maximale d'un fichier (sur le disque) préchargé avec les images voisines.
+const PREFETCH_MAX_BYTES: u64 = 24 << 20;
+
 pub struct TexEntry {
     pub handle: TextureHandle,
+    /// Taille en mémoire graphique (RGBA 8 bits).
+    pub bytes: usize,
+    /// Dernier passage d'affichage qui l'a demandée (éviction de la moins récente).
+    pub used: u64,
 }
 
 pub struct Shown {
@@ -181,6 +194,7 @@ pub struct App {
     pub fit: bool,
     pub checker: Option<TextureHandle>,
     pub conv: ConvertUi,
+    pub batch: crate::batch_ui::BatchUi,
     pub pal_dlg: crate::palette_ui::PalDlg,
     pub toast: Option<(String, Instant)>,
     pub show_about: bool,
@@ -190,6 +204,7 @@ pub struct App {
     pub folder_dlg: Option<(String, bool)>,
     /// Fenêtre « Renommer » du fichier affiché.
     pub rename_dlg: Option<RenameDlg>,
+    pub frm_dlg: Option<crate::frm_ui::FrmDlg>,
     /// Texte du filtre de fichiers (zone de saisie au-dessus de l'arborescence).
     pub file_filter: String,
     /// Fenêtre du sélecteur de couleur du fond personnalisé.
@@ -234,6 +249,7 @@ impl App {
             fit: true,
             checker: None,
             conv: ConvertUi::new(&settings.conv),
+            batch: crate::batch_ui::BatchUi::new(&settings.batch),
             pal_dlg: crate::palette_ui::PalDlg::new(&settings.pal_fmt),
             toast: None,
             show_about: false,
@@ -241,6 +257,7 @@ impl App {
             expand_confirm: None,
             folder_dlg: None,
             rename_dlg: None,
+            frm_dlg: None,
             file_filter: String::new(),
             bg_picker_open: false,
             bg_picker_prev: (crate::view::Background::Checker, [64, 64, 64], 255),
@@ -447,7 +464,9 @@ impl App {
         for d in [1i32, -1, 2, -2] {
             let j = (i as i32 + d).rem_euclid(n as i32) as usize;
             let p = self.files[j].clone();
-            if !self.cache.contains(&p) && !v.contains(&p) && self.files[j] != self.files[i] {
+            // Les très gros fichiers ne sont pas préchargés : leur décodage coûte beaucoup de mémoire pour une image peut-être jamais vue.
+            let huge = std::fs::metadata(&p).is_ok_and(|m| m.len() > PREFETCH_MAX_BYTES);
+            if !huge && !self.cache.contains(&p) && !v.contains(&p) && self.files[j] != self.files[i] {
                 v.push(p);
             }
         }
@@ -555,6 +574,7 @@ impl App {
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.settings.conv = self.conv.to_settings();
+        self.settings.batch = self.batch.to_settings();
         self.settings.pal_fmt = self.pal_dlg.fmt.id().to_string();
         eframe::set_value(storage, SETTINGS_KEY, &self.settings);
         self.win.save();
@@ -581,12 +601,14 @@ impl eframe::App for App {
         self.poll_extract(&ctx);
         self.tick_slideshow(&ctx);
         self.convert_window(&ctx);
+        self.batch_window(&ctx);
         self.palette_window(&ctx);
         self.about_window(&ctx);
         self.cli_help_window(&ctx);
         self.expand_confirm_window(&ctx);
         self.folder_window(&ctx);
         self.rename_window(&ctx);
+        self.frm_window(&ctx);
         self.bg_picker_window(&ctx);
         self.toast_overlay(&ctx);
         if self.is_loading() {

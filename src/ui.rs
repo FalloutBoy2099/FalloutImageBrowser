@@ -1,6 +1,6 @@
 //! Interface : menus, barre d'outils, arborescence, propriétés et zone d'affichage.
 
-use crate::app::{App, Smoothing, TexEntry};
+use crate::app::{App, MAX_FAVORITES, Smoothing, TexEntry};
 use crate::i18n::{self, Lang, tr};
 use crate::icons::{Icon, icon_button};
 use crate::loader::PalPolicy;
@@ -12,7 +12,7 @@ use crate::view::{anchor_in_canvas, box_downscale, can_show_all_dirs, canvas_siz
 use eframe::egui::{self, Align2, Color32, ColorImage, FontId, Id, Rect, Sense, Stroke, TextureOptions, Ui, Vec2, pos2, vec2};
 use rayon::prelude::*;
 use std::borrow::Cow;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const MIN_ZOOM: f32 = 0.01;
 const MAX_ZOOM: f32 = 64.0;
@@ -30,6 +30,8 @@ enum PropAction {
     Text,
     Json,
     Xml,
+    Sha,
+    ShaStop,
 }
 
 /// Mémoire graphique maximale des textures de l'image affichée (toutes les images / niveaux / transformations confondus).
@@ -59,6 +61,7 @@ impl App {
             && self.expand_confirm.is_none()
             && self.folder_dlg.is_none()
             && self.rename_dlg.is_none()
+            && self.anim_dlg.is_none()
             && self.frm_dlg.is_none()
             && !self.bg_picker_open
             && ctx.input(|i| i.key_pressed(egui::Key::Escape))
@@ -78,6 +81,7 @@ impl App {
             || self.expand_confirm.is_some()
             || self.folder_dlg.is_some()
             || self.rename_dlg.is_some()
+            || self.anim_dlg.is_some()
             || self.frm_dlg.is_some()
             || self.bg_picker_open
         {
@@ -112,6 +116,17 @@ impl App {
         let pressed = |k: Key| ctx.input(|i| i.key_pressed(k));
         let ctrl = ctx.input(|i| i.modifiers.command);
         let alt = ctx.input(|i| i.modifiers.alt);
+        // Saisie au clavier au-dessus de l'arborescence : saute au premier nom qui commence par les caractères tapés.
+        let over_tree = self.tree_rect.is_some_and(|r| ctx.input(|i| i.pointer.hover_pos().is_some_and(|p| r.contains(p))));
+        if over_tree && !ctrl && !alt {
+            let typed: String = ctx.input(|i| i.events.iter().filter_map(|e| if let egui::Event::Text(t) = e { Some(t.clone()) } else { None }).collect());
+            let empty = self.ta_buf.is_empty() || self.ta_time.elapsed() > Duration::from_millis(1200);
+            let typed: String = typed.chars().filter(|c| !c.is_control() && (!c.is_whitespace() || !empty)).collect();
+            if !typed.is_empty() {
+                self.type_ahead(ctx, &typed);
+                return;
+            }
+        }
         if ctrl && !alt {
             // Raccourcis des menus (affichés dans les menus).
             if pressed(Key::N) {
@@ -169,6 +184,7 @@ impl App {
         }
         if pressed(Key::F) {
             self.fit = true;
+            self.fit_up = true;
             self.pan = Vec2::ZERO;
         }
         if pressed(Key::P)
@@ -220,6 +236,42 @@ impl App {
         if pressed(Key::F11) || (pressed(Key::Escape) && self.fullscreen) {
             self.toggle_fullscreen(ctx);
         }
+    }
+
+    /// Recherche au clavier dans l'arborescence : les caractères tapés s'accumulent pendant 1,2 s ; la même lettre répétée
+    /// passe à l'élément suivant qui commence par elle.
+    fn type_ahead(&mut self, ctx: &egui::Context, typed: &str) {
+        if self.ta_time.elapsed() > Duration::from_millis(1200) {
+            self.ta_buf.clear();
+        }
+        self.ta_time = Instant::now();
+        self.ta_buf.push_str(&typed.to_lowercase());
+        let rows = &self.tree.rows;
+        let n = rows.len();
+        if n == 0 {
+            return;
+        }
+        let cur = rows
+            .iter()
+            .position(|r| matches!(r.kind, RowKind::File) && self.wanted.as_deref() == Some(r.path.as_path()))
+            .or_else(|| rows.iter().position(|r| self.tree.selected_dir.as_deref() == Some(r.path.as_path())));
+        let first = self.ta_buf.chars().next().unwrap_or(' ');
+        let repeated = self.ta_buf.chars().count() > 1 && self.ta_buf.chars().all(|c| c == first);
+        let (needle, start) = if repeated {
+            (first.to_string(), cur.map_or(0, |c| c + 1))
+        } else if self.ta_buf.chars().count() == 1 {
+            (self.ta_buf.clone(), cur.map_or(0, |c| c + 1))
+        } else {
+            (self.ta_buf.clone(), cur.unwrap_or(0))
+        };
+        let found = (0..n).map(|k| (start + k) % n).find(|&i| rows[i].name.to_lowercase().starts_with(&needle));
+        let Some(i) = found else { return };
+        let row = rows[i].clone();
+        match row.kind {
+            RowKind::File => self.show_file(ctx, &row.path),
+            RowKind::Dir { .. } => self.open_dir(ctx, &row.path, false),
+        }
+        self.tree_scroll_to = self.tree.rows.iter().position(|r| r.path == row.path);
     }
 
     /// Ouvre le sélecteur de couleur du fond personnalisé (fenêtre modale).
@@ -536,7 +588,8 @@ impl App {
                 if item(ui, tr("m.open_dat"), "Ctrl+D", true) {
                     self.pick_dat(&ctx);
                 }
-                if item(ui, tr("m.reload"), "F5", true) {
+                ui.separator();
+                if item(ui, tr("t.refresh"), "F5", true) {
                     self.reload_dir(&ctx);
                 }
                 ui.separator();
@@ -571,6 +624,7 @@ impl App {
                 ui.separator();
                 if item(ui, tr("m.fit"), "F", has_img) {
                     self.fit = true;
+                    self.fit_up = true;
                     self.pan = Vec2::ZERO;
                 }
                 if item(ui, tr("m.fullscreen"), "F11", true) {
@@ -753,17 +807,20 @@ impl App {
                     }
                     ui.separator();
                     let has_img = self.shown.is_some();
+                    // Ajustement automatique plafonné à 100 % (petite image) : c'est « 100 % » qui est actif.
+                    let at_actual = (self.zoom - 1.0).abs() < 1e-3;
                     if icon_button(ui, Icon::ZoomIn, &tr("t.zoom_in"), false, has_img).clicked() {
                         self.zoom_by(1.25);
                     }
                     if icon_button(ui, Icon::ZoomOut, &tr("t.zoom_out"), false, has_img).clicked() {
                         self.zoom_by(0.8);
                     }
-                    if icon_button(ui, Icon::Actual, &tr("t.zoom_100"), !self.fit && (self.zoom - 1.0).abs() < 1e-3, has_img).clicked() {
+                    if icon_button(ui, Icon::Actual, &tr("t.zoom_100"), at_actual && (!self.fit || !self.fit_up), has_img).clicked() {
                         self.zoom_actual();
                     }
-                    if icon_button(ui, Icon::Fit, &tr("m.fit"), self.fit, has_img).clicked() {
+                    if icon_button(ui, Icon::Fit, &tr("m.fit"), self.fit && !(at_actual && !self.fit_up), has_img).clicked() {
                         self.fit = true;
+                        self.fit_up = true;
                         self.pan = Vec2::ZERO;
                     }
                     // Niveau de zoom actuel.
@@ -800,8 +857,58 @@ impl App {
 
     // ------------------------------------------------------------------ arborescence
 
+    /// Boutons d'accès rapide (8 au plus) : Bureau, Documents, Téléchargements (réservés) puis les favoris ;
+    /// clic droit sur un favori : le retirer.
+    fn favorites_bar(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+        let mut open: Option<std::path::PathBuf> = None;
+        let mut remove: Option<usize> = None;
+        let cur = self.tree.selected_dir.clone();
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+            for (key, path) in &self.special {
+                let tip = format!("{}\n{}", tr(key), path.display());
+                let icon = match *key {
+                    "t.desktop" => Icon::Desktop,
+                    "t.documents" => Icon::Documents,
+                    _ => Icon::Downloads,
+                };
+                if icon_button(ui, icon, &tip, cur.as_ref() == Some(path), true).clicked() {
+                    open = Some(path.clone());
+                }
+            }
+            for (i, path) in self.settings.favorites.iter().enumerate() {
+                let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.display().to_string());
+                let tip = format!("{name}\n{}", path.display());
+                let r = letter_button(ui, &letter_of(&name), &tip, cur.as_ref() == Some(path));
+                if r.clicked() {
+                    open = Some(path.clone());
+                }
+                r.context_menu(|ui| {
+                    if ui.button(tr("t.fav_remove")).clicked() {
+                        remove = Some(i);
+                        ui.close();
+                    }
+                });
+            }
+        });
+        if let Some(i) = remove {
+            self.settings.favorites.remove(i);
+        }
+        if let Some(p) = open {
+            if crate::dat::stat(&p).is_some() || p.is_dir() {
+                self.open_dir(ctx, &p, false);
+                self.reveal_in_tree();
+            } else {
+                self.toast(tr("t.folder_missing"));
+            }
+        }
+    }
+
     pub fn tree_panel(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        self.tree_rect = Some(ui.max_rect());
+        ui.add_space(5.0);
+        self.favorites_bar(ui, &ctx);
         // Filtre sur les noms de fichiers du dossier courant.
         ui.add_space(5.0);
         ui.horizontal(|ui| {
@@ -841,6 +948,8 @@ impl App {
         let sel_dir = self.tree.selected_dir.clone();
         let mut action: Option<(usize, bool)> = None; // (ligne, clic sur la flèche)
         let mut ctx_act: Option<(std::path::PathBuf, u8)> = None;
+        let favs = self.settings.favorites.clone();
+        let fav_free = favs.len() < MAX_FAVORITES;
         let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
         if let Some(r) = self.tree_scroll_to.take() {
             let target = (r as f32 * row_h - ui.available_height() * 0.5).max(0.0);
@@ -912,12 +1021,29 @@ impl App {
                         ui.close();
                     }
                     ui.separator();
-                    if ui.add_enabled(crate::dat::is_virtual(&row.path), egui::Button::new(tr("t.extract"))).clicked() {
-                        ctx_act = Some((row.path.clone(), 3));
+                    if ui.add(egui::Button::new(tr("t.refresh")).shortcut_text("F5")).clicked() {
+                        let target = if is_dir { row.path.clone() } else { sel_dir.clone().unwrap_or_else(|| row.path.clone()) };
+                        ctx_act = Some((target, 4));
+                        ui.close();
+                    }
+                    // Favoris : grisé pour un fichier, un dossier déjà favori, ou quand les 5 places sont prises.
+                    let can_fav = is_dir && fav_free && !favs.contains(&row.path);
+                    if ui.add_enabled(can_fav, egui::Button::new(tr("t.fav_add"))).clicked() {
+                        ctx_act = Some((row.path.clone(), 5));
                         ui.close();
                     }
                     if ui.button(tr("t.open_explorer")).clicked() {
                         ctx_act = Some((row.path.clone(), 2));
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.add_enabled(crate::dat::is_virtual(&row.path), egui::Button::new(tr("t.extract"))).clicked() {
+                        ctx_act = Some((row.path.clone(), 3));
+                        ui.close();
+                    }
+                    // Animation à partir des images du dossier (impossible dans une archive).
+                    if ui.add_enabled(is_dir && !crate::dat::is_virtual(&row.path), egui::Button::new(tr("t.create_anim"))).clicked() {
+                        ctx_act = Some((row.path.clone(), 6));
                         ui.close();
                     }
                 });
@@ -937,6 +1063,14 @@ impl App {
                 }
             } else if what == 3 {
                 self.extract_from_archive(&path);
+            } else if what == 4 {
+                self.refresh_dir(&ctx, &path);
+            } else if what == 5 {
+                if self.settings.favorites.len() < MAX_FAVORITES && !self.settings.favorites.contains(&path) {
+                    self.settings.favorites.push(path);
+                }
+            } else if what == 6 {
+                self.open_anim_dialog(&path);
             } else {
                 self.tree.collapse_others(&path);
             }
@@ -972,27 +1106,48 @@ impl App {
         let on_disk = !crate::dat::is_virtual(&path);
         // Boutons du bas (icônes seules) : image et chemin ; copier, déplacer, renommer ; convertir ; copier les informations.
         let mut action: Option<PropAction> = None;
+        let sha = s.loaded.sha256.clone();
+        let ref_hash = self.ref_hash.clone();
         egui::Panel::bottom("props_copy").show(ui, |ui| {
             ui.add_space(3.0);
-            ui.horizontal_wrapped(|ui| {
-                let mut button = |ui: &mut Ui, icon: Icon, tip: &str, enabled: bool, act: PropAction| {
-                    if icon_button(ui, icon, &tr(tip), false, enabled).clicked() {
-                        action = Some(act);
-                    }
-                };
-                button(ui, Icon::CopyImage, "m.copy_image", true, PropAction::CopyImage);
-                button(ui, Icon::CopyPath, "t.copy_path", true, PropAction::CopyPath);
+            // Comparaison avec la dernière empreinte copiée ; la croix arrête le mode comparaison.
+            if let Some((name, h)) = &ref_hash {
+                // Ligne de hauteur fixe (celle du bouton) : le texte et la croix sont centrés verticalement dans la même bande.
+                ui.allocate_ui_with_layout(vec2(ui.available_width(), 28.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let (color, key) = if *h == sha { (Color32::from_rgb(90, 190, 120), "t.sha_same") } else { (Color32::from_rgb(230, 120, 90), "t.sha_diff") };
+                    ui.colored_label(color, i18n::trf(key, &[("name", name.clone())]));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if icon_button(ui, Icon::Close, &tr("t.sha_stop"), false, true).clicked() {
+                            action = Some(PropAction::ShaStop);
+                        }
+                    });
+                });
                 ui.separator();
-                button(ui, Icon::CopyTo, "t.copy_to", true, PropAction::CopyTo);
-                button(ui, Icon::MoveTo, "t.move_to", on_disk, PropAction::MoveTo);
-                button(ui, Icon::Rename, "t.rename", on_disk, PropAction::Rename);
-                ui.separator();
-                button(ui, Icon::Convert, "m.convert", true, PropAction::Convert);
-                button(ui, Icon::Palette, "m.extract_pal", true, PropAction::ConvertPalette);
-                ui.separator();
-                button(ui, Icon::CopyText, "t.copy_text", true, PropAction::Text);
-                button(ui, Icon::CopyJson, "t.copy_json", true, PropAction::Json);
-                button(ui, Icon::CopyXml, "t.copy_xml", true, PropAction::Xml);
+            }
+            // Pas d'espacement vertical après la dernière ligne : la marge du bas égale celle du haut.
+            ui.scope(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.horizontal_wrapped(|ui| {
+                    let mut button = |ui: &mut Ui, icon: Icon, tip: &str, enabled: bool, act: PropAction| {
+                        if icon_button(ui, icon, &tr(tip), false, enabled).clicked() {
+                            action = Some(act);
+                        }
+                    };
+                    button(ui, Icon::CopyImage, "m.copy_image", true, PropAction::CopyImage);
+                    button(ui, Icon::CopyPath, "t.copy_path", true, PropAction::CopyPath);
+                    ui.separator();
+                    button(ui, Icon::CopyTo, "t.copy_to", true, PropAction::CopyTo);
+                    button(ui, Icon::MoveTo, "t.move_to", on_disk, PropAction::MoveTo);
+                    button(ui, Icon::Rename, "t.rename", on_disk, PropAction::Rename);
+                    ui.separator();
+                    button(ui, Icon::Convert, "m.convert", true, PropAction::Convert);
+                    button(ui, Icon::Palette, "m.extract_pal", true, PropAction::ConvertPalette);
+                    ui.separator();
+                    button(ui, Icon::CopyText, "t.copy_text", true, PropAction::Text);
+                    button(ui, Icon::CopyJson, "t.copy_json", true, PropAction::Json);
+                    button(ui, Icon::CopyXml, "t.copy_xml", true, PropAction::Xml);
+                    button(ui, Icon::Sha, "t.copy_sha", true, PropAction::Sha);
+                });
             });
             ui.add_space(3.0);
         });
@@ -1059,6 +1214,13 @@ impl App {
                 ctx.copy_text(path.display().to_string());
                 self.toast(tr("t.path_copied"));
             }
+            Some(PropAction::Sha) => {
+                ctx.copy_text(sha.clone());
+                let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                self.ref_hash = Some((name, sha));
+                self.toast(tr("t.sha_copied"));
+            }
+            Some(PropAction::ShaStop) => self.ref_hash = None,
             Some(PropAction::CopyTo) => self.copy_or_move_to(&ctx, &path, false),
             Some(PropAction::MoveTo) => self.copy_or_move_to(&ctx, &path, true),
             Some(PropAction::Rename) => self.open_rename(&path),
@@ -1150,6 +1312,75 @@ impl App {
         } else if !cancel && !modal.should_close() {
             dlg.fresh = false;
             self.rename_dlg = Some(dlg);
+        }
+    }
+
+    pub fn open_anim_dialog(&mut self, dir: &std::path::Path) {
+        let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| "animation".into());
+        self.anim_dlg = Some(crate::app::AnimDlg { src: dir.to_path_buf(), format: Format::Frm, name, out_dir: dir.display().to_string(), fresh: true });
+    }
+
+    pub fn anim_window(&mut self, ctx: &egui::Context) {
+        let Some(mut dlg) = self.anim_dlg.take() else { return };
+        let name = dlg.name.trim().to_string();
+        let invalid = crate::fileops::validate_name(&name).is_err();
+        let out_dir = std::path::PathBuf::from(dlg.out_dir.trim());
+        let target = crate::batch::animation_path(&out_dir, &name, dlg.format);
+        let exists = !invalid && target.exists();
+        let can_create = !invalid && !exists && !dlg.out_dir.trim().is_empty();
+        let (mut go, mut cancel) = (false, false);
+        let modal = egui::Modal::new(Id::new("anim_dlg")).frame(crate::dialog::frame(ctx)).show(ctx, |ui| {
+            ui.set_width(520.0);
+            crate::dialog::setup(ui);
+            cancel |= crate::dialog::title(ui, &tr("t.create_anim"));
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(dlg.src.display().to_string()).weak());
+            ui.add_space(4.0);
+            egui::Grid::new("anim_grid").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+                ui.label(tr("t.anim_format"));
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut dlg.format, Format::Frm, "FRM");
+                    ui.selectable_value(&mut dlg.format, Format::Art, "ART");
+                });
+                ui.end_row();
+                ui.label(tr("t.anim_name"));
+                let edit = ui.add(egui::TextEdit::singleline(&mut dlg.name).desired_width(f32::INFINITY));
+                if dlg.fresh {
+                    edit.request_focus();
+                }
+                if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && can_create {
+                    go = true;
+                }
+                ui.end_row();
+                ui.label(tr("t.anim_outdir"));
+                ui.horizontal(|ui| {
+                    let w = ui.available_width() - 36.0;
+                    ui.add(egui::TextEdit::singleline(&mut dlg.out_dir).desired_width(w));
+                    if ui.button("…").clicked()
+                        && let Some(p) = rfd::FileDialog::new().set_title(tr("t.anim_outdir")).set_directory(&out_dir).pick_folder()
+                    {
+                        dlg.out_dir = p.display().to_string();
+                    }
+                });
+                ui.end_row();
+            });
+            if exists {
+                ui.colored_label(ui.visuals().error_fg_color, tr("t.rename_exists"));
+            } else if invalid && !dlg.name.trim().is_empty() {
+                ui.colored_label(ui.visuals().error_fg_color, tr("t.rename_invalid"));
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                go |= crate::dialog::button_enabled(ui, can_create, tr("c.ok")).clicked();
+                cancel |= crate::dialog::button(ui, tr("c.cancel")).clicked();
+            });
+        });
+        if go {
+            let (src, fmt, name) = (dlg.src.clone(), dlg.format, dlg.name.clone());
+            self.create_animation(ctx, &src, &out_dir, &name, fmt);
+        } else if !cancel && !modal.should_close() {
+            dlg.fresh = false;
+            self.anim_dlg = Some(dlg);
         }
     }
 
@@ -1265,7 +1496,9 @@ impl App {
             let (iw, ih) = (iw as f32, ih as f32);
             // Zoom « ajusté ».
             if self.fit {
-                let z = (rect.width() * ppp / iw).min(rect.height() * ppp / ih).min(1.0);
+                let z = (rect.width() * ppp / iw).min(rect.height() * ppp / ih);
+                // Au démarrage et à l'ouverture, une petite image n'est pas agrandie ; la commande « Ajuster à la fenêtre » l'agrandit.
+                let z = if self.fit_up { z } else { z.min(1.0) };
                 self.zoom = z.clamp(MIN_ZOOM, MAX_ZOOM);
                 self.pan = Vec2::ZERO;
             }
@@ -1281,12 +1514,13 @@ impl App {
                 self.zoom_actual();
             }
             if resp.double_clicked() {
-                if self.fit && self.zoom < 1.0 {
+                if self.fit && (self.zoom - 1.0).abs() > 1e-3 {
                     self.zoom_actual();
                 } else if self.fit {
                     // déjà à 100 %
                 } else {
                     self.fit = true;
+                    self.fit_up = true;
                 }
             }
             if resp.hovered() {
@@ -1553,29 +1787,33 @@ impl App {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         if n > 1 {
-                            if icon_button(ui, Icon::Prev, &tr("a.frame"), false, true).clicked() {
-                                frame = (frame + n - 1) % n;
-                                playing = false;
-                            }
                             if icon_button(ui, if playing { Icon::Pause } else { Icon::Play }, &tr(if playing { "a.pause" } else { "a.play" }), false, true).clicked() {
                                 playing = !playing;
                             }
-                            if icon_button(ui, Icon::Next, &tr("a.frame"), false, true).clicked() {
-                                frame = (frame + 1) % n;
+                            ui.separator();
+                            // « Image x / y » : sélection directe de l'image par le curseur, encadré des boutons image précédente / suivante.
+                            ui.label(tr("a.frame"));
+                            if icon_button(ui, Icon::FramePrev, &tr("a.prev_frame"), false, true).clicked() {
+                                frame = (frame + n - 1) % n;
                                 playing = false;
                             }
-                            // « Image x / y » : sélection directe de l'image par le curseur.
-                            ui.label(tr("a.frame"));
                             let mut f = frame as u32 + 1;
                             ui.spacing_mut().slider_width = 150.0;
                             if ui.add(egui::Slider::new(&mut f, 1..=n as u32).suffix(format!(" / {n}"))).changed() {
                                 frame = f as usize - 1;
                                 playing = false;
                             }
+                            if icon_button(ui, Icon::FrameNext, &tr("a.next_frame"), false, true).clicked() {
+                                frame = (frame + 1) % n;
+                                playing = false;
+                            }
                         }
                         if dirs > 1 {
                             ui.separator();
                             ui.label(tr("a.direction"));
+                            if icon_button(ui, Icon::Prev, &tr("a.direction"), false, true).clicked() {
+                                dir = (dir + dirs - 1) % dirs;
+                            }
                             egui::ComboBox::from_id_salt("dir_combo").selected_text(pic.dir_label(dir)).width(if pic.dir_labels.is_empty() { 50.0 } else { 230.0 }).show_ui(
                                 ui,
                                 |ui| {
@@ -1584,6 +1822,9 @@ impl App {
                                     }
                                 },
                             );
+                            if icon_button(ui, Icon::Next, &tr("a.direction"), false, true).clicked() {
+                                dir = (dir + 1) % dirs;
+                            }
                             n = pic.dir_len(dir);
                             frame = frame.min(n.saturating_sub(1));
                         }
@@ -1748,6 +1989,32 @@ impl App {
 }
 
 /// Curseur à dégradé : `value` entre 0 et 1, `track(t)` donne la couleur du dégradé en `t`. Renvoie vrai si la valeur change.
+/// Première lettre ou chiffre d'un nom (en majuscule), pour le bouton d'un favori.
+fn letter_of(name: &str) -> String {
+    name.chars().find(|c| c.is_alphanumeric()).or_else(|| name.chars().next()).map(|c| c.to_uppercase().collect()).unwrap_or_else(|| "?".to_string())
+}
+
+/// Bouton carré affichant une lettre.
+fn letter_button(ui: &mut Ui, letter: &str, tip: &str, selected: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
+    let v = ui.visuals();
+    let down = resp.is_pointer_button_down_on();
+    let fill = if selected {
+        v.selection.bg_fill
+    } else if down {
+        v.widgets.active.bg_fill
+    } else if resp.hovered() {
+        v.widgets.hovered.bg_fill
+    } else {
+        v.widgets.inactive.weak_bg_fill
+    };
+    let fg = if selected { v.selection.stroke.color } else { v.widgets.inactive.fg_stroke.color };
+    ui.painter().rect_filled(rect, 4.0, fill);
+    ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, v.widgets.noninteractive.bg_stroke.color), egui::StrokeKind::Inside);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, letter, FontId::proportional(15.0), fg);
+    resp.on_hover_text(tip)
+}
+
 fn gradient_slider(ui: &mut Ui, value: &mut f32, width: f32, track: impl Fn(f32) -> Color32) -> bool {
     const HANDLE: f32 = 9.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click_and_drag());

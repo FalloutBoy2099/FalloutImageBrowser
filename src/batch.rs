@@ -1,9 +1,11 @@
 //! Conversion de fichiers vers fichiers, partagée par l'interface et la ligne de commande.
 
 use crate::convert::*;
-use crate::formats;
+use crate::formats::{self, EncodeOpts};
+use crate::imageops::ImageOps;
 use crate::loader::{Loaded, PalPolicy, load_file};
-use crate::model::{Format, Picture, is_supported};
+use crate::model::{Format, Frame, Picture, Pixels, frame_to_rgba, is_supported};
+use crate::tree::natural_cmp;
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -90,6 +92,59 @@ pub fn convert_path(path: &Path, job: &Job, out_dir: &Path, name: Option<&str>, 
 /// Image convertible en mode répertoire (les fichiers de palette sont exclus).
 pub fn convertible(p: &Path) -> bool {
     is_supported(p) && Format::from_path(p) != Some(Format::Palette)
+}
+
+/// Chemin de sortie d'une animation : `name` (sans extension) dans `out_dir`, avec l'extension du format.
+pub fn animation_path(out_dir: &Path, name: &str, format: Format) -> PathBuf {
+    out_dir.join(format!("{}.{}", name.trim(), format.ext()))
+}
+
+/// Crée une animation FRM ou ART à partir des images de `dir`, prises dans l'ordre naturel des noms (première image de
+/// chaque fichier), et l'écrit sous `name` (sans extension) dans `out_dir`. Ne remplace jamais un fichier existant.
+/// Renvoie le chemin écrit et le nombre d'images.
+pub fn build_animation(dir: &Path, out_dir: &Path, name: &str, format: Format, policy: &PalPolicy) -> Result<(PathBuf, usize), String> {
+    crate::fileops::validate_name(name.trim()).map_err(|e| e.to_string())?;
+    let out = animation_path(out_dir, name, format);
+    if out.exists() {
+        return Err(crate::i18n::tr("t.rename_exists"));
+    }
+    let mut inputs: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && convertible(p) && !matches!(Format::from_path(p), Some(Format::Frm | Format::Art)))
+        .collect();
+    inputs.sort_by(|a, b| natural_cmp(&a.file_name().unwrap_or_default().to_string_lossy(), &b.file_name().unwrap_or_default().to_string_lossy()));
+    if inputs.is_empty() {
+        return Err(crate::i18n::tr("t.anim_none"));
+    }
+    let frames: Vec<Frame> = inputs
+        .par_iter()
+        .map(|p| {
+            let loaded = load_file(p, policy)?;
+            let f = loaded.pic.frames.first().ok_or_else(|| format!("{}: image vide", p.display()))?;
+            let rgba = frame_to_rgba(f, loaded.pic.palette.as_ref());
+            // Toutes les images sont ancrées au centre du bord bas (convention des animations Fallout).
+            Ok(Frame { width: f.width, height: f.height, pixels: Pixels::Rgba(rgba), pos: (-(f.width as i32 / 2), -(f.height as i32)), delay_ms: None })
+        })
+        .collect::<Result<_, String>>()?;
+    let n = frames.len();
+    let mut pic = Picture::new(Format::Png);
+    pic.frames = frames;
+    pic.frames_per_dir = n;
+    pic.fps = 10;
+    pic.has_transparency = true;
+    let pal = match (format, policy) {
+        (Format::Frm, PalPolicy::Custom(p, _)) => PalChoice::Custom(p.clone()),
+        (Format::Frm, _) => PalChoice::Fallout,
+        _ => PalChoice::Adaptive,
+    };
+    let opts = ConvertOptions { format, depth: DepthChoice::Indexed(pal), dither: false, bg: [0, 0, 0], enc: EncodeOpts::default(), ops: ImageOps::default() };
+    let prep = prepare(&pic, &opts, &Selection::default()).map_err(|e| e.to_string())?;
+    let bytes = formats::encode(&prep, &opts.enc).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
+    std::fs::write(&out, bytes).map_err(|e| e.to_string())?;
+    Ok((out, n))
 }
 
 /// (chemin source, sous-dossier relatif à conserver sous le dossier de sortie), mode répertoire, depuis une archive

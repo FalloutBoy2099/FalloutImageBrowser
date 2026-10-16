@@ -64,6 +64,8 @@ pub struct Settings {
     /// Extraction de palette : dernier format (id) et dernier dossier.
     pub pal_fmt: String,
     pub pal_dir: Option<PathBuf>,
+    /// Dossiers favoris (5 au plus), affichés au-dessus du filtre de l'arborescence.
+    pub favorites: Vec<PathBuf>,
 }
 
 impl Default for Settings {
@@ -95,6 +97,7 @@ impl Default for Settings {
             batch: Default::default(),
             pal_fmt: "pal".to_string(),
             pal_dir: None,
+            favorites: Vec::new(),
         }
     }
 }
@@ -106,7 +109,19 @@ pub struct RenameDlg {
     pub fresh: bool,
 }
 
+/// Fenêtre « Créer une animation » : dossier des images, format de sortie, nom (sans extension) et dossier de sortie.
+pub struct AnimDlg {
+    pub src: PathBuf,
+    pub format: Format,
+    pub name: String,
+    pub out_dir: String,
+    pub fresh: bool,
+}
+
 /// Taille maximale d'un fichier (sur le disque) préchargé avec les images voisines.
+/// Favoris ajustables (les trois autres boutons sont réservés : Bureau, Documents, Téléchargements).
+pub const MAX_FAVORITES: usize = 5;
+
 const PREFETCH_MAX_BYTES: u64 = 24 << 20;
 
 pub struct TexEntry {
@@ -192,6 +207,8 @@ pub struct App {
     pub zoom: f32,
     pub pan: Vec2,
     pub fit: bool,
+    /// L'ajustement peut agrandir l'image au-delà de 100 % (commande explicite « Ajuster à la fenêtre »).
+    pub fit_up: bool,
     pub checker: Option<TextureHandle>,
     pub conv: ConvertUi,
     pub batch: crate::batch_ui::BatchUi,
@@ -204,6 +221,8 @@ pub struct App {
     pub folder_dlg: Option<(String, bool)>,
     /// Fenêtre « Renommer » du fichier affiché.
     pub rename_dlg: Option<RenameDlg>,
+    /// Fenêtre « Créer une animation » d'un dossier.
+    pub anim_dlg: Option<AnimDlg>,
     pub frm_dlg: Option<crate::frm_ui::FrmDlg>,
     /// Texte du filtre de fichiers (zone de saisie au-dessus de l'arborescence).
     pub file_filter: String,
@@ -223,6 +242,14 @@ pub struct App {
     /// Extraction d'archive en cours (thread) : résultat et dossier de sortie.
     pub extract_job: Option<(std::sync::mpsc::Receiver<Result<crate::dat::Extracted, String>>, std::path::PathBuf)>,
     pub tree_scroll_to: Option<usize>,
+    /// Bureau, Documents, Téléchargements (boutons réservés de la barre de favoris).
+    pub special: Vec<(&'static str, PathBuf)>,
+    /// Zone de l'arborescence (la saisie au clavier n'y agit que si la souris la survole) et recherche en cours.
+    pub tree_rect: Option<egui::Rect>,
+    pub ta_buf: String,
+    pub ta_time: Instant,
+    /// Dernier SHA-256 copié (nom du fichier, empreinte) : sert à comparer deux fichiers.
+    pub ref_hash: Option<(String, String)>,
     pub last_title: String,
     pub toolbar_w: f32,
     pub win: crate::winprefs::WinPrefs,
@@ -247,6 +274,7 @@ impl App {
             zoom: 1.0,
             pan: Vec2::ZERO,
             fit: true,
+            fit_up: false,
             checker: None,
             conv: ConvertUi::new(&settings.conv),
             batch: crate::batch_ui::BatchUi::new(&settings.batch),
@@ -257,6 +285,7 @@ impl App {
             expand_confirm: None,
             folder_dlg: None,
             rename_dlg: None,
+            anim_dlg: None,
             frm_dlg: None,
             file_filter: String::new(),
             bg_picker_open: false,
@@ -270,6 +299,11 @@ impl App {
             slideshow_t: 0.0,
             extract_job: None,
             tree_scroll_to: None,
+            special: crate::tree::special_folders().into_iter().filter(|(_, p)| p.is_dir()).collect(),
+            tree_rect: None,
+            ta_buf: String::new(),
+            ta_time: Instant::now(),
+            ref_hash: None,
             last_title: String::new(),
             toolbar_w: 0.0,
             win: crate::winprefs::WinPrefs::load(),
@@ -401,6 +435,30 @@ impl App {
             if let Some(w) = self.wanted.clone() {
                 self.show_file(ctx, &w);
             }
+        }
+    }
+
+    /// Recharge un dossier de l'arborescence depuis le disque (le dossier courant : liste des fichiers et image comprises).
+    pub fn refresh_dir(&mut self, ctx: &egui::Context, dir: &Path) {
+        if self.tree.selected_dir.as_deref() == Some(dir) {
+            self.reload_dir(ctx);
+        } else {
+            self.tree.reload_dir(dir);
+        }
+    }
+
+    /// Crée une animation FRM / ART à partir des images du dossier et l'affiche.
+    pub fn create_animation(&mut self, ctx: &egui::Context, dir: &Path, out_dir: &Path, name: &str, format: Format) {
+        match crate::batch::build_animation(dir, out_dir, name, format, &self.policy) {
+            Ok((out, n)) => {
+                self.tree.reload_dir(out_dir);
+                self.open_dir(ctx, out_dir, false);
+                self.show_file(ctx, &out);
+                self.reveal_in_tree();
+                let file = out.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                self.toast(i18n::trf("t.anim_created", &[("file", file), ("n", n.to_string())]));
+            }
+            Err(e) => self.toast(e),
         }
     }
 
@@ -608,6 +666,7 @@ impl eframe::App for App {
         self.expand_confirm_window(&ctx);
         self.folder_window(&ctx);
         self.rename_window(&ctx);
+        self.anim_window(&ctx);
         self.frm_window(&ctx);
         self.bg_picker_window(&ctx);
         self.toast_overlay(&ctx);

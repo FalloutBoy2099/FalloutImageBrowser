@@ -16,6 +16,7 @@ pub mod dialog;
 pub mod fileops;
 pub mod formats;
 pub mod frm_ui;
+pub mod hash;
 pub mod i18n;
 pub mod icon;
 pub mod icons;

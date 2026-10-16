@@ -12,6 +12,12 @@ pub enum Icon {
     Fit,
     Play,
     Pause,
+    FramePrev,
+    FrameNext,
+    Desktop,
+    Documents,
+    Downloads,
+    Sha,
     Folder,
     CopyText,
     CopyJson,
@@ -155,6 +161,46 @@ fn paint_icon(ui: &Ui, r: Rect, icon: Icon, c: Color32) {
             let tab = Rect::from_min_size(q.left_top() - vec2(0.0, 2.0), vec2(8.0, 3.0));
             p.rect_stroke(q, 1.5, st, egui::StrokeKind::Inside);
             p.rect_filled(tab, 1.0, c);
+        }
+        Icon::Desktop => {
+            // Écran sur son pied.
+            let q = Rect::from_center_size(cen - vec2(0.0, 1.5), vec2(18.0, 12.0));
+            p.rect_stroke(q, 1.5, st, egui::StrokeKind::Inside);
+            p.line_segment([pos2(cen.x, q.bottom()), pos2(cen.x, q.bottom() + 3.0)], st);
+            p.line_segment([pos2(cen.x - 4.0, q.bottom() + 3.5), pos2(cen.x + 4.0, q.bottom() + 3.5)], st);
+        }
+        Icon::Documents => {
+            // Feuille avec des lignes de texte.
+            let q = Rect::from_center_size(cen, vec2(13.0, 16.0));
+            p.rect_stroke(q, 1.5, st, egui::StrokeKind::Inside);
+            for i in 0..3 {
+                let y = q.top() + 5.0 + i as f32 * 3.4;
+                p.line_segment([pos2(q.left() + 3.0, y), pos2(q.right() - 3.0, y)], Stroke::new(1.2, c));
+            }
+        }
+        Icon::Downloads => {
+            // Flèche vers un plateau.
+            arrow(p, cen - vec2(0.0, 7.0), cen + vec2(0.0, 3.0), st);
+            p.line_segment([cen + vec2(-8.0, 7.0), cen + vec2(8.0, 7.0)], st);
+            p.line_segment([cen + vec2(-8.0, 3.5), cen + vec2(-8.0, 7.0)], st);
+            p.line_segment([cen + vec2(8.0, 3.5), cen + vec2(8.0, 7.0)], st);
+        }
+        Icon::Sha => {
+            // « # » : empreinte.
+            for dx in [-2.5, 2.5] {
+                p.line_segment([cen + vec2(dx, -7.0), cen + vec2(dx, 7.0)], st);
+            }
+            for dy in [-2.8, 2.8] {
+                p.line_segment([cen + vec2(-7.0, dy), cen + vec2(7.0, dy)], st);
+            }
+        }
+        Icon::FramePrev | Icon::FrameNext => {
+            // Triangle contre une barre : image précédente / suivante (et non fichier précédent / suivant).
+            let left = matches!(icon, Icon::FramePrev);
+            let d = if left { -1.0 } else { 1.0 };
+            let bar_x = cen.x + d * 6.0;
+            p.line_segment([pos2(bar_x, cen.y - 7.0), pos2(bar_x, cen.y + 7.0)], Stroke::new(2.0, c));
+            tri(p, cen - vec2(d * 1.5, 0.0), 6.0, left, c);
         }
         Icon::Pause => {
             p.rect_filled(Rect::from_center_size(cen - vec2(3.5, 0.0), vec2(4.0, 13.0)), 1.0, c);

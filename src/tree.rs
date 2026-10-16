@@ -113,6 +113,58 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
     }
 }
 
+/// Bureau, Documents et Téléchargements de l'utilisateur : (clé du libellé, dossier).
+#[cfg(windows)]
+pub fn special_folders() -> Vec<(&'static str, PathBuf)> {
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::{FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, SHGetKnownFolderPath};
+    let get = |id: &windows_sys::core::GUID| -> Option<PathBuf> {
+        let mut p: *mut u16 = std::ptr::null_mut();
+        // SAFETY : `p` reçoit une chaîne allouée par le système, terminée par zéro et libérée juste après la copie.
+        unsafe {
+            let hr = SHGetKnownFolderPath(id, 0, std::ptr::null_mut(), &mut p);
+            if hr != 0 || p.is_null() {
+                return None;
+            }
+            let mut len = 0;
+            while *p.add(len) != 0 {
+                len += 1;
+            }
+            let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, len));
+            CoTaskMemFree(p as *const _);
+            Some(PathBuf::from(s))
+        }
+    };
+    let mut v = Vec::new();
+    for (key, id) in [("t.desktop", &FOLDERID_Desktop), ("t.documents", &FOLDERID_Documents), ("t.downloads", &FOLDERID_Downloads)] {
+        if let Some(p) = get(id) {
+            v.push((key, p));
+        }
+    }
+    v
+}
+
+#[cfg(not(windows))]
+pub fn special_folders() -> Vec<(&'static str, PathBuf)> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return Vec::new() };
+    // Linux : ~/.config/user-dirs.dirs (XDG) ; repli sur les noms anglais, qui sont aussi ceux de macOS.
+    let cfg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".config")).join("user-dirs.dirs");
+    let text = std::fs::read_to_string(cfg).unwrap_or_default();
+    let xdg = |name: &str| -> Option<PathBuf> {
+        let line = text.lines().find(|l| l.trim_start().starts_with(name))?;
+        let v = line.split_once('=')?.1.trim().trim_matches('"');
+        Some(match v.strip_prefix("$HOME/") {
+            Some(rest) => home.join(rest),
+            None => PathBuf::from(v),
+        })
+    };
+    vec![
+        ("t.desktop", xdg("XDG_DESKTOP_DIR").unwrap_or_else(|| home.join("Desktop"))),
+        ("t.documents", xdg("XDG_DOCUMENTS_DIR").unwrap_or_else(|| home.join("Documents"))),
+        ("t.downloads", xdg("XDG_DOWNLOAD_DIR").unwrap_or_else(|| home.join("Downloads"))),
+    ]
+}
+
 #[cfg(windows)]
 fn is_hidden(e: &std::fs::DirEntry) -> bool {
     use std::os::windows::fs::MetadataExt;

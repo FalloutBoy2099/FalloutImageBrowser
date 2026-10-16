@@ -38,6 +38,8 @@ pub struct Loaded {
     pub pic: Picture,
     pub path: PathBuf,
     pub size: u64,
+    /// SHA-256 du fichier tel qu'il est stocké (aussi pour un fichier d'archive).
+    pub sha256: String,
 }
 
 pub struct Done {
@@ -168,8 +170,9 @@ pub fn load_file(path: &Path, policy: &PalPolicy) -> Result<Loaded, String> {
         },
     };
     let size = data.len() as u64;
-    add_generic_sections(&mut pic, path, size);
-    Ok(Loaded { pic, path: path.to_path_buf(), size })
+    let sha256 = crate::hash::sha256_hex(&data);
+    add_generic_sections(&mut pic, path, size, &sha256);
+    Ok(Loaded { pic, path: path.to_path_buf(), size, sha256 })
 }
 
 fn fmt_time(t: Option<SystemTime>) -> Option<String> {
@@ -178,13 +181,14 @@ fn fmt_time(t: Option<SystemTime>) -> Option<String> {
     Some(dt.format("%Y-%m-%d %H:%M:%S").to_string())
 }
 
-fn add_generic_sections(pic: &mut Picture, path: &Path, size: u64) {
+fn add_generic_sections(pic: &mut Picture, path: &Path, size: u64, sha256: &str) {
     let archive = crate::dat::split(path).map(|(a, _)| a);
     let meta = std::fs::metadata(archive.as_deref().unwrap_or(path)).ok();
     let mut file = Section { title: "sec.file".into(), items: Vec::new() };
     file.add("p.name", path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
     file.add("p.folder", path.parent().map(|p| p.display().to_string()).unwrap_or_default());
     file.add("p.size", fmt_bytes(size));
+    file.add("p.sha256", sha256);
     if let Some(t) = fmt_time(meta.as_ref().and_then(|m| m.modified().ok())) {
         file.add("p.modified", t);
     }

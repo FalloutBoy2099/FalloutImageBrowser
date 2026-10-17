@@ -19,7 +19,7 @@ fn every_language_has_every_key() {
 fn keys_used_in_sources_exist() {
     // Toutes les clés littérales du code source doivent exister dans le fichier anglais.
     let mut used = std::collections::BTreeSet::new();
-    for entry in std::fs::read_dir("src").unwrap().flatten().chain(std::fs::read_dir("src/formats").unwrap().flatten()) {
+    for entry in std::fs::read_dir("src").unwrap().flatten().chain(std::fs::read_dir("src/formats").unwrap().flatten()).chain(std::fs::read_dir("src/ui").unwrap().flatten()) {
         let p = entry.path();
         if p.extension().map(|e| e == "rs").unwrap_or(false) {
             let s = std::fs::read_to_string(&p).unwrap();

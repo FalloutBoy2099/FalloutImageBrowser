@@ -1,10 +1,9 @@
 //! Lecture minimale d'archives ZIP (entrées stockées ou « deflate »), pour les formats ORA et KRA.
 
 use anyhow::{Result, anyhow, bail};
-use std::io::Read;
 
 /// Taille maximale d'une entrée décompressée (protège d'une archive piégée).
-const MAX_ENTRY: u64 = 1 << 30;
+use crate::dat::read_limited;
 
 struct Entry {
     name: String,
@@ -76,9 +75,7 @@ impl<'a> Zip<'a> {
             0 => Ok(raw.to_vec()),
             8 => {
                 // La taille annoncée n'est pas fiable : capacité prudente et décompression bornée (archive piégée).
-                let mut out = Vec::with_capacity(e.usize_.min(64 << 20));
-                flate2::read::DeflateDecoder::new(raw).take(MAX_ENTRY).read_to_end(&mut out).map_err(|er| anyhow!("{name} : {er}"))?;
-                Ok(out)
+                read_limited(flate2::read::DeflateDecoder::new(raw), e.usize_, name)
             }
             m => bail!("méthode de compression ZIP non prise en charge ({m})"),
         }

@@ -57,7 +57,21 @@ fn norm(s: &str) -> String {
 }
 
 /// Taille maximale d'une entrée décompressée (protège d'une archive piégée).
-const MAX_ENTRY: u64 = 1 << 30;
+pub const MAX_ENTRY: u64 = 256 << 20;
+
+/// Lit tout `r` en mémoire, sans dépasser `MAX_ENTRY` : une entrée plus grande est refusée (jamais tronquée en silence).
+/// `hint` est la taille annoncée, non fiable : elle ne sert qu'à une capacité initiale prudente.
+pub fn read_limited(r: impl Read, hint: usize, what: &str) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(hint.min(64 << 20));
+    r.take(MAX_ENTRY + 1).read_to_end(&mut out).map_err(|e| anyhow!("{what} : {e}"))?;
+    if out.len() as u64 > MAX_ENTRY {
+        bail!("{what} : entrée trop grande (plus de {} Mio)", MAX_ENTRY >> 20);
+    }
+    Ok(out)
+}
+
+/// Volume maximal décodé pour lire une entrée d'une archive 7z solide (entrées précédentes du bloc comprises).
+const MAX_7Z_DECODE: u64 = 1 << 30;
 
 fn cache() -> &'static Mutex<HashMap<PathBuf, Arc<Dat>>> {
     static C: OnceLock<Mutex<HashMap<PathBuf, Arc<Dat>>>> = OnceLock::new();
@@ -159,11 +173,11 @@ pub fn walk(dir: &Path) -> Vec<(PathBuf, PathBuf)> {
 impl Dat {
     pub fn open(path: &Path) -> Result<Arc<Dat>> {
         // Le verrou reste pris pendant l'analyse : plusieurs threads qui ouvrent la même archive en même temps ne la lisent qu'une fois.
-        let mut c = cache().lock().unwrap();
+        let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
         if let Some(d) = c.get(path) {
             return Ok(d.clone());
         }
-        let dat = Arc::new(Dat::parse(path)?);
+        let dat = Arc::new(guarded(|| Dat::parse(path))?);
         c.insert(path.to_path_buf(), dat.clone());
         Ok(dat)
     }
@@ -276,26 +290,52 @@ impl Dat {
         let f = std::fs::File::open(&self.path)?;
         let mut zip = zip::ZipArchive::new(f).map_err(|er| anyhow!("{er}"))?;
         let file = zip.by_index(e.offset as usize).map_err(|er| anyhow!("{} : {er}", e.path))?;
-        // La taille annoncée n'est pas fiable : capacité prudente et lecture bornée (archive piégée).
-        let mut out = Vec::with_capacity((e.size as usize).min(64 << 20));
-        file.take(MAX_ENTRY).read_to_end(&mut out).map_err(|er| anyhow!("{} : {er}", e.path))?;
-        Ok(out)
+        read_limited(file, e.size as usize, &e.path)
     }
 
+    /// Lit une entrée 7z sans jamais décompresser plus que prévu. Dans une archive « solide », les entrées qui précèdent la
+    /// cible doivent être décodées : elles sont écartées sans être gardées en mémoire, et la somme des tailles annoncées
+    /// (dans l'en-tête, non fiable) est plafonnée par `MAX_7Z_DECODE`.
     fn read_7z(&self, e: &DatEntry) -> Result<Vec<u8>> {
-        let mut r = sevenz_rust2::ArchiveReader::open(&self.path, sevenz_rust2::Password::empty()).map_err(|er| anyhow!("{er}"))?;
-        let (name, size) = {
-            let f = r.archive().files.get(e.offset as usize).ok_or_else(|| anyhow!("entrée hors de l'archive"))?;
-            (f.name().to_string(), f.size())
-        };
-        if size > MAX_ENTRY {
+        use sevenz_rust2::{Archive, BlockDecoder, Password};
+        let archive = Archive::open(&self.path).map_err(|er| anyhow!("{er}"))?;
+        let target = e.offset as usize;
+        let file = archive.files.get(target).ok_or_else(|| anyhow!("entrée hors de l'archive"))?;
+        if file.size > MAX_ENTRY {
             bail!("{} : entrée trop grande", e.path);
         }
-        r.read_file(&name).map_err(|er| anyhow!("{} : {er}", e.path))
+        let Some(block) = archive.stream_map.file_block_index.get(target).copied().flatten().filter(|_| file.has_stream && file.size > 0) else {
+            return Ok(Vec::new());
+        };
+        // Volume à décoder : tout le bloc jusqu'à la cible (les entrées d'un bloc sont décodées dans l'ordre).
+        let first = archive.stream_map.block_first_file_index[block];
+        let to_decode: u64 = archive.files[first..=target].iter().fold(0u64, |acc, f| acc.saturating_add(f.size));
+        if to_decode > MAX_7Z_DECODE {
+            bail!("{} : archive 7z solide trop volumineuse pour une lecture isolée", e.path);
+        }
+        let mut source = std::fs::File::open(&self.path)?;
+        let password = Password::empty();
+        let mut out = Vec::new();
+        let target_ptr: *const sevenz_rust2::ArchiveEntry = file;
+        BlockDecoder::new(1, block, &archive, &password, &mut source)
+            .for_each_entries(&mut |entry, reader| {
+                if std::ptr::eq(entry, target_ptr) {
+                    out = read_limited(reader, file.size as usize, &e.path).map_err(|er| std::io::Error::other(er.to_string()))?;
+                    Ok(false)
+                } else {
+                    std::io::copy(&mut reader.take(entry.size), &mut std::io::sink())?;
+                    Ok(true)
+                }
+            })
+            .map_err(|er| anyhow!("{} : {er}", e.path))?;
+        Ok(out)
     }
 
     pub fn read(&self, idx: usize) -> Result<Vec<u8>> {
         let e = &self.entries[idx];
+        if e.size as u64 > MAX_ENTRY {
+            bail!("{} : entrée trop grande (plus de {} Mio)", e.path, MAX_ENTRY >> 20);
+        }
         match self.kind {
             DatKind::Zip => return guarded(|| self.read_zip(e)),
             DatKind::SevenZ => return guarded(|| self.read_7z(e)),
@@ -316,9 +356,7 @@ impl Dat {
                 if e.flags == 0 {
                     return Ok(packed);
                 }
-                let mut out = Vec::with_capacity(cap);
-                flate2::read::ZlibDecoder::new(&packed[..]).take(MAX_ENTRY).read_to_end(&mut out).map_err(|e| anyhow!("zlib : {e}"))?;
-                Ok(out)
+                read_limited(flate2::read::ZlibDecoder::new(&packed[..]), cap, &e.path)
             }
             DatKind::Zip | DatKind::SevenZ => unreachable!("lu plus haut"),
             DatKind::Dat1 => {

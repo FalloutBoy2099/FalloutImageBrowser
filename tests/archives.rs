@@ -54,3 +54,11 @@ fn corrupt_archives_report_an_error() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn oversized_entries_are_refused_not_truncated() {
+    // Un flux sans fin (archive piégée) est refusé au-delà du plafond, jamais renvoyé tronqué.
+    let r = dat::read_limited(std::io::repeat(0), 0, "bomb.bin");
+    assert!(r.is_err());
+    assert!(dat::read_limited(&b"abc"[..], 3, "ok.bin").unwrap() == b"abc");
+}

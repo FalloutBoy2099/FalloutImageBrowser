@@ -288,3 +288,5 @@ t.create_anim=Luo animaatio…
 t.anim_format=Tulostusmuoto
 t.anim_name=Tiedoston nimi
 t.anim_outdir=Kohdekansio
+m.taskbar_windows=Näytä lisäikkunat tehtäväpalkissa
+m.taskbar_windows_tip=Erä-, Tietoja- ja Ohje-ikkunat muuttuvat oikeiksi ikkunoiksi, joilla on oma painike tehtäväpalkissa

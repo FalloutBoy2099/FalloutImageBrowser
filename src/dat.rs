@@ -1,4 +1,4 @@
-//! Archives .DAT de Fallout 1 (DAT1, LZSS) et Fallout 2 (DAT2, zlib), lues comme des dossiers virtuels.
+//! Archives .DAT de Fallout 1 (DAT1, LZSS) et Fallout 2 (DAT2, zlib), ainsi que .ZIP et .7Z, lues comme des dossiers virtuels.
 //!
 //! Un fichier contenu dans une archive est désigné par un chemin « normal » :
 //! `C:\Jeux\master.dat\art\critters\hmjmpsaa.frm`. Toutes les fonctions du programme qui prennent un
@@ -14,6 +14,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub enum DatKind {
     Dat1,
     Dat2,
+    /// Archive ZIP : `DatEntry::offset` est l'index de l'entrée.
+    Zip,
+    /// Archive 7z : `DatEntry::offset` est l'index du fichier dans l'archive.
+    SevenZ,
 }
 
 #[derive(Clone, Debug)]
@@ -64,10 +68,15 @@ pub fn is_dat_ext(p: &Path) -> bool {
     p.extension().map(|e| e.eq_ignore_ascii_case("dat")).unwrap_or(false)
 }
 
+/// Extension d'une archive lue comme un dossier : .dat, .zip ou .7z.
+pub fn is_archive_ext(p: &Path) -> bool {
+    p.extension().map(|e| ["dat", "zip", "7z"].iter().any(|x| e.eq_ignore_ascii_case(x))).unwrap_or(false)
+}
+
 /// Découpe `…/master.dat/art/x.frm` en (archive, chemin interne `art/x.frm`).
 pub fn split(path: &Path) -> Option<(PathBuf, String)> {
     for a in path.ancestors() {
-        if is_dat_ext(a) && a.is_file() {
+        if is_archive_ext(a) && a.is_file() {
             let rest = path.strip_prefix(a).ok()?;
             let inner: Vec<String> = rest.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
             return Some((a.to_path_buf(), inner.join("/")));
@@ -196,6 +205,12 @@ impl Dat {
     }
 
     fn parse(path: &Path) -> Result<Dat> {
+        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        match ext.as_str() {
+            "zip" => return guarded(|| Dat::parse_zip(path)),
+            "7z" => return guarded(|| Dat::parse_7z(path)),
+            _ => {}
+        }
         let mut f = std::fs::File::open(path).map_err(|e| anyhow!("{}: {e}", path.display()))?;
         let len = f.metadata()?.len();
         if len < 16 {
@@ -229,8 +244,63 @@ impl Dat {
         }
     }
 
+    fn parse_zip(path: &Path) -> Result<Dat> {
+        let f = std::fs::File::open(path).map_err(|e| anyhow!("{}: {e}", path.display()))?;
+        let mut zip = zip::ZipArchive::new(f).map_err(|e| anyhow!("{} : archive ZIP non reconnue ({e})", path.display()))?;
+        let mut entries = Vec::new();
+        for i in 0..zip.len() {
+            let Ok(file) = zip.by_index_raw(i) else { continue };
+            let p = norm(&file.name().map(|n| n.to_string()).unwrap_or_else(|_| String::from_utf8_lossy(file.name_raw()).to_string()));
+            if file.is_dir() || p.is_empty() {
+                continue;
+            }
+            entries.push(DatEntry { path: p, flags: 0, offset: i as u64, size: file.size().min(u32::MAX as u64) as u32, packed: 0 });
+        }
+        Ok(Dat::build(path, DatKind::Zip, entries))
+    }
+
+    fn parse_7z(path: &Path) -> Result<Dat> {
+        let r = sevenz_rust2::ArchiveReader::open(path, sevenz_rust2::Password::empty()).map_err(|e| anyhow!("{} : archive 7z non reconnue ({e})", path.display()))?;
+        let mut entries = Vec::new();
+        for (i, f) in r.archive().files.iter().enumerate() {
+            let p = norm(f.name());
+            if f.is_directory() || f.is_anti_item() || p.is_empty() {
+                continue;
+            }
+            entries.push(DatEntry { path: p, flags: 0, offset: i as u64, size: f.size().min(u32::MAX as u64) as u32, packed: 0 });
+        }
+        Ok(Dat::build(path, DatKind::SevenZ, entries))
+    }
+
+    fn read_zip(&self, e: &DatEntry) -> Result<Vec<u8>> {
+        let f = std::fs::File::open(&self.path)?;
+        let mut zip = zip::ZipArchive::new(f).map_err(|er| anyhow!("{er}"))?;
+        let file = zip.by_index(e.offset as usize).map_err(|er| anyhow!("{} : {er}", e.path))?;
+        // La taille annoncée n'est pas fiable : capacité prudente et lecture bornée (archive piégée).
+        let mut out = Vec::with_capacity((e.size as usize).min(64 << 20));
+        file.take(MAX_ENTRY).read_to_end(&mut out).map_err(|er| anyhow!("{} : {er}", e.path))?;
+        Ok(out)
+    }
+
+    fn read_7z(&self, e: &DatEntry) -> Result<Vec<u8>> {
+        let mut r = sevenz_rust2::ArchiveReader::open(&self.path, sevenz_rust2::Password::empty()).map_err(|er| anyhow!("{er}"))?;
+        let (name, size) = {
+            let f = r.archive().files.get(e.offset as usize).ok_or_else(|| anyhow!("entrée hors de l'archive"))?;
+            (f.name().to_string(), f.size())
+        };
+        if size > MAX_ENTRY {
+            bail!("{} : entrée trop grande", e.path);
+        }
+        r.read_file(&name).map_err(|er| anyhow!("{} : {er}", e.path))
+    }
+
     pub fn read(&self, idx: usize) -> Result<Vec<u8>> {
         let e = &self.entries[idx];
+        match self.kind {
+            DatKind::Zip => return guarded(|| self.read_zip(e)),
+            DatKind::SevenZ => return guarded(|| self.read_7z(e)),
+            _ => {}
+        }
         let mut f = std::fs::File::open(&self.path)?;
         // Les tailles viennent de l'archive : on vérifie qu'elles tiennent dans le fichier avant d'allouer.
         let flen = f.metadata()?.len();
@@ -250,6 +320,7 @@ impl Dat {
                 flate2::read::ZlibDecoder::new(&packed[..]).take(MAX_ENTRY).read_to_end(&mut out).map_err(|e| anyhow!("zlib : {e}"))?;
                 Ok(out)
             }
+            DatKind::Zip | DatKind::SevenZ => unreachable!("lu plus haut"),
             DatKind::Dat1 => {
                 let kind = if e.flags == 0 { 0x10 } else { e.flags & 0xF0 };
                 match kind {
@@ -290,6 +361,12 @@ impl Dat {
             }
         }
     }
+}
+
+/// Exécute une lecture d'archive tierce en convertissant un éventuel plantage (archive corrompue) en erreur : un panic sous le
+/// verrou du cache d'archives le rendrait inutilisable pour le reste de la session.
+fn guarded<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| Err(anyhow!("archive corrompue")))
 }
 
 /// LZSS de Fallout 1 : anneau de 4096 octets rempli d'espaces, écriture à partir de 4078,

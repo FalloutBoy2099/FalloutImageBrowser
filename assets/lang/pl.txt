@@ -288,3 +288,5 @@ t.create_anim=Utwórz animację…
 t.anim_format=Format wyjściowy
 t.anim_name=Nazwa pliku
 t.anim_outdir=Folder docelowy
+m.taskbar_windows=Pokaż dodatkowe okna na pasku zadań
+m.taskbar_windows_tip=Okna wsadowe, „O programie” i pomocy stają się prawdziwymi oknami z własnym przyciskiem na pasku zadań

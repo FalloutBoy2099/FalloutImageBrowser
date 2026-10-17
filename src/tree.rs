@@ -231,7 +231,7 @@ impl DirNode {
                     continue;
                 }
                 self.children.push(DirNode::new(p, name));
-            } else if crate::dat::is_dat_ext(&p) {
+            } else if crate::dat::is_archive_ext(&p) {
                 let mut n = DirNode::new(p, name);
                 n.archive = true;
                 self.children.push(n);

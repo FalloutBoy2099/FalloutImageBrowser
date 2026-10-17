@@ -288,3 +288,5 @@ t.create_anim=创建动画…
 t.anim_format=输出格式
 t.anim_name=文件名
 t.anim_outdir=输出文件夹
+m.taskbar_windows=在任务栏中显示附加窗口
+m.taskbar_windows_tip=批处理、关于和帮助窗口将成为独立窗口，并在任务栏中有各自的按钮

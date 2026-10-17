@@ -288,3 +288,5 @@ t.create_anim=Crea un'animazione…
 t.anim_format=Formato di output
 t.anim_name=Nome del file
 t.anim_outdir=Cartella di output
+m.taskbar_windows=Mostra le finestre aggiuntive nella barra delle applicazioni
+m.taskbar_windows_tip=Le finestre Batch, Informazioni e Guida diventano finestre vere con un proprio pulsante nella barra delle applicazioni

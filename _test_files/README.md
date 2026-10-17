@@ -8,6 +8,7 @@ works from any machine). They are small samples kept only to check that the read
 | `fallout/` | FRM (still image, 6-direction animation), RIX splash screen | round trips, GIF/ART/FRM conversions, palette export, CLI |
 | `arcanum/` | two ART files | round trips |
 | `psd/` | three PSD files and a PNG | PSD reader (compared with the PNG), PNG reader |
+| `archives/` | the same three small files (two PPM images, one text file) packed as ZIP and 7z | ZIP / 7z archives read as folders |
 | `tactics/zar`, `tactics/spr`, `tactics/til` | Fallout Tactics ZAR, SPR and TIL files | Fallout Tactics readers, corruption tests |
 
 The files come from the games' own data (Fallout, Arcanum, Fallout Tactics and mods) and from the author's work files; they

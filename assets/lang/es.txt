@@ -288,3 +288,5 @@ t.create_anim=Crear una animación…
 t.anim_format=Formato de salida
 t.anim_name=Nombre del archivo
 t.anim_outdir=Carpeta de salida
+m.taskbar_windows=Mostrar las ventanas adicionales en la barra de tareas
+m.taskbar_windows_tip=Las ventanas de lote, Acerca de y Ayuda pasan a ser ventanas reales con su propio botón en la barra de tareas

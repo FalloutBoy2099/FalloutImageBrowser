@@ -288,3 +288,5 @@ t.create_anim=Skapa en animation…
 t.anim_format=Utdataformat
 t.anim_name=Filnamn
 t.anim_outdir=Utdatamapp
+m.taskbar_windows=Visa extra fönster i aktivitetsfältet
+m.taskbar_windows_tip=Batch-, Om- och Hjälp-fönstren blir riktiga fönster med egen knapp i aktivitetsfältet

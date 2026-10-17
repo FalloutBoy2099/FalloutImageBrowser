@@ -288,3 +288,5 @@ t.create_anim=Create an animation…
 t.anim_format=Output format
 t.anim_name=File name
 t.anim_outdir=Output folder
+m.taskbar_windows=Show extra windows in the taskbar
+m.taskbar_windows_tip=Batch, About and Help windows become real windows with their own taskbar button

@@ -288,3 +288,5 @@ t.create_anim=Criar uma animação…
 t.anim_format=Formato de saída
 t.anim_name=Nome do ficheiro
 t.anim_outdir=Pasta de saída
+m.taskbar_windows=Mostrar as janelas adicionais na barra de tarefas
+m.taskbar_windows_tip=As janelas de lote, Acerca e Ajuda tornam-se janelas reais com o seu próprio botão na barra de tarefas

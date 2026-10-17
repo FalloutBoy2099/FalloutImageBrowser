@@ -288,3 +288,5 @@ t.create_anim=Animatie maken…
 t.anim_format=Uitvoerformaat
 t.anim_name=Bestandsnaam
 t.anim_outdir=Uitvoermap
+m.taskbar_windows=Extra vensters weergeven op de taakbalk
+m.taskbar_windows_tip=Batch-, Info- en Help-vensters worden echte vensters met een eigen knop op de taakbalk

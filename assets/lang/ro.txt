@@ -288,3 +288,5 @@ t.create_anim=Creează o animație…
 t.anim_format=Format de ieșire
 t.anim_name=Numele fișierului
 t.anim_outdir=Dosar de ieșire
+m.taskbar_windows=Afișează ferestrele suplimentare în bara de activități
+m.taskbar_windows_tip=Ferestrele Lot, Despre și Ajutor devin ferestre reale, cu propriul buton în bara de activități

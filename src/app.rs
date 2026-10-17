@@ -66,6 +66,8 @@ pub struct Settings {
     pub pal_dir: Option<PathBuf>,
     /// Dossiers favoris (5 au plus), affichés au-dessus du filtre de l'arborescence.
     pub favorites: Vec<PathBuf>,
+    /// Fenêtres supplémentaires indépendantes (lot, À propos, aide) : vraies fenêtres du système, visibles dans la barre des tâches.
+    pub taskbar_windows: bool,
 }
 
 impl Default for Settings {
@@ -98,6 +100,7 @@ impl Default for Settings {
             pal_fmt: "pal".to_string(),
             pal_dir: None,
             favorites: Vec::new(),
+            taskbar_windows: false,
         }
     }
 }

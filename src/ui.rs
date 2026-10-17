@@ -552,7 +552,7 @@ impl App {
     }
 
     pub fn pick_dat(&mut self, ctx: &egui::Context) {
-        let mut d = rfd::FileDialog::new().set_title(tr("m.open_dat")).add_filter("DAT", &["dat", "DAT"]);
+        let mut d = rfd::FileDialog::new().set_title(tr("m.open_dat")).add_filter("DAT / ZIP / 7Z", &["dat", "DAT", "zip", "ZIP", "7z", "7Z"]);
         if let Some(dir) = &self.settings.last_dir
             && let Some(p) = crate::dat::real_parent(dir)
         {
@@ -723,6 +723,8 @@ impl App {
                 ui.label(tr("m.xbuttons"));
                 ui.radio_value(&mut self.settings.xbtn_zoom, false, tr("m.xb_nav"));
                 ui.radio_value(&mut self.settings.xbtn_zoom, true, tr("m.xb_zoom"));
+                ui.separator();
+                ui.checkbox(&mut self.settings.taskbar_windows, tr("m.taskbar_windows")).on_hover_text(tr("m.taskbar_windows_tip"));
             });
             ui.menu_button(tr("m.palette"), |ui| {
                 let mode = self.settings.pal_mode;
@@ -1856,21 +1858,18 @@ impl App {
 
     pub fn cli_help_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_cli_help;
-        egui::Window::new(tr("m.cli_help")).open(&mut open).frame(crate::dialog::window_frame(ctx)).collapsible(false).resizable(true).default_size([760.0, 560.0]).show(
-            ctx,
-            |ui| {
-                ui.add(egui::Label::new(tr("cli.intro")).wrap());
-                ui.horizontal(|ui| {
-                    if ui.button(tr("c.copy")).clicked() {
-                        ctx.copy_text(crate::cli::usage());
-                    }
-                });
-                ui.separator();
-                egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-                    ui.add(egui::Label::new(egui::RichText::new(crate::cli::usage()).monospace().size(12.5)).extend().selectable(true));
-                });
-            },
-        );
+        extra_window(ctx, self.settings.taskbar_windows, "cli_help_window", tr("m.cli_help"), [760.0, 560.0], true, false, &mut open, |ui| {
+            ui.add(egui::Label::new(tr("cli.intro")).wrap());
+            ui.horizontal(|ui| {
+                if ui.button(tr("c.copy")).clicked() {
+                    ctx.copy_text(crate::cli::usage());
+                }
+            });
+            ui.separator();
+            egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(crate::cli::usage()).monospace().size(12.5)).extend().selectable(true));
+            });
+        });
         self.show_cli_help = open;
     }
 
@@ -1942,33 +1941,27 @@ impl App {
 
     pub fn about_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_about;
-        egui::Window::new(tr("m.about"))
-            .open(&mut open)
-            .frame(crate::dialog::window_frame(ctx))
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_min_width(480.0);
-                ui.horizontal(|ui| {
-                    ui.heading("Fallout Image Browser");
-                    ui.label(egui::RichText::new("by Kain").italics());
-                });
-                ui.label(egui::RichText::new(format!("v{}  ·  Rust + egui + wgpu", env!("CARGO_PKG_VERSION"))).weak());
-                ui.label(egui::RichText::new(tr("about.based")).weak());
-                ui.add_space(4.0);
-                ui.separator();
-                ui.label(egui::RichText::new(tr("about.formats")).strong());
-                ui.add(egui::Label::new(Format::ALL.iter().map(|f| f.name()).collect::<Vec<_>>().join("  ·  ")).extend());
-                ui.label(egui::RichText::new(tr("about.readonly")).weak().small());
-                ui.add(egui::Label::new(Format::READ_ONLY.iter().filter(|f| **f != Format::Palette).map(|f| f.name()).collect::<Vec<_>>().join("  ·  ")).extend());
-                ui.label(egui::RichText::new(tr("about.palettes")).weak().small());
-                ui.label("PAL  ·  ACT  ·  GPL  ·  KPL  ·  HEX");
-                ui.add_space(4.0);
-                ui.separator();
-                ui.label(egui::RichText::new(tr("about.keys_title")).strong());
-                ui.label(tr("about.keys"));
+        extra_window(ctx, self.settings.taskbar_windows, "about_window", tr("m.about"), [540.0, 520.0], false, true, &mut open, |ui| {
+            ui.set_min_width(480.0);
+            ui.horizontal(|ui| {
+                ui.heading("Fallout Image Browser");
+                ui.label(egui::RichText::new("by Kain").italics());
             });
+            ui.label(egui::RichText::new(format!("v{}  ·  Rust + egui + wgpu", env!("CARGO_PKG_VERSION"))).weak());
+            ui.label(egui::RichText::new(tr("about.based")).weak());
+            ui.add_space(4.0);
+            ui.separator();
+            ui.label(egui::RichText::new(tr("about.formats")).strong());
+            ui.add(egui::Label::new(Format::ALL.iter().map(|f| f.name()).collect::<Vec<_>>().join("  ·  ")).extend());
+            ui.label(egui::RichText::new(tr("about.readonly")).weak().small());
+            ui.add(egui::Label::new(Format::READ_ONLY.iter().filter(|f| **f != Format::Palette).map(|f| f.name()).collect::<Vec<_>>().join("  ·  ")).extend());
+            ui.label(egui::RichText::new(tr("about.palettes")).weak().small());
+            ui.label("PAL  ·  ACT  ·  GPL  ·  KPL  ·  HEX");
+            ui.add_space(4.0);
+            ui.separator();
+            ui.label(egui::RichText::new(tr("about.keys_title")).strong());
+            ui.label(tr("about.keys"));
+        });
         self.show_about = open;
     }
 
@@ -1989,6 +1982,36 @@ impl App {
 }
 
 /// Curseur à dégradé : `value` entre 0 et 1, `track(t)` donne la couleur du dégradé en `t`. Renvoie vrai si la valeur change.
+/// Fenêtre indépendante (non modale) : fenêtre flottante dans la fenêtre principale ou, avec `native`, vraie fenêtre du système
+/// (donc dans la barre des tâches). `open` passe à faux quand l'utilisateur la ferme.
+pub fn extra_window(ctx: &egui::Context, native: bool, id: &str, title: String, size: [f32; 2], resizable: bool, centered: bool, open: &mut bool, mut add: impl FnMut(&mut Ui)) {
+    if !native {
+        let mut w = egui::Window::new(title).id(Id::new(id)).open(open).frame(crate::dialog::window_frame(ctx)).collapsible(false).resizable(resizable).default_size(size);
+        if centered {
+            w = w.anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0));
+        }
+        w.show(ctx, |ui| add(ui));
+        return;
+    }
+    let builder =
+        egui::ViewportBuilder::default().with_title(title).with_inner_size(size).with_min_inner_size([320.0, 200.0]).with_resizable(resizable).with_maximize_button(resizable);
+    let mut closed = false;
+    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(id), builder, |ui, _class| {
+        let frame = egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::same(16));
+        egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+            if resizable {
+                add(ui);
+            } else {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| add(ui));
+            }
+        });
+        closed |= ui.ctx().input(|i| i.viewport().close_requested() || i.key_pressed(egui::Key::Escape));
+    });
+    if closed {
+        *open = false;
+    }
+}
+
 /// Première lettre ou chiffre d'un nom (en majuscule), pour le bouton d'un favori.
 fn letter_of(name: &str) -> String {
     name.chars().find(|c| c.is_alphanumeric()).or_else(|| name.chars().next()).map(|c| c.to_uppercase().collect()).unwrap_or_else(|| "?".to_string())

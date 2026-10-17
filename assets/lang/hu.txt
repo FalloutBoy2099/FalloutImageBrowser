@@ -288,3 +288,5 @@ t.create_anim=Animáció létrehozása…
 t.anim_format=Kimeneti formátum
 t.anim_name=Fájlnév
 t.anim_outdir=Kimeneti mappa
+m.taskbar_windows=További ablakok megjelenítése a tálcán
+m.taskbar_windows_tip=A Kötegelt, Névjegy és Súgó ablakok valódi ablakok lesznek saját tálcagombbal

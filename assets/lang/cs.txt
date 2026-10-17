@@ -288,3 +288,5 @@ t.create_anim=Vytvořit animaci…
 t.anim_format=Výstupní formát
 t.anim_name=Název souboru
 t.anim_outdir=Výstupní složka
+m.taskbar_windows=Zobrazit další okna na hlavním panelu
+m.taskbar_windows_tip=Okna Dávka, O programu a Nápověda se stanou skutečnými okny s vlastním tlačítkem na hlavním panelu

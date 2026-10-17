@@ -288,3 +288,5 @@ t.create_anim=Créer une animation…
 t.anim_format=Format de sortie
 t.anim_name=Nom du fichier
 t.anim_outdir=Dossier de sortie
+m.taskbar_windows=Afficher les fenêtres supplémentaires dans la barre des tâches
+m.taskbar_windows_tip=Les fenêtres Lot, À propos et Aide deviennent de vraies fenêtres avec leur propre bouton dans la barre des tâches

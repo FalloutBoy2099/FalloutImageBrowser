@@ -288,3 +288,5 @@ t.create_anim=Opret en animation…
 t.anim_format=Outputformat
 t.anim_name=Filnavn
 t.anim_outdir=Outputmappe
+m.taskbar_windows=Vis ekstra vinduer på proceslinjen
+m.taskbar_windows_tip=Batch-, Om- og Hjælp-vinduerne bliver rigtige vinduer med deres egen knap på proceslinjen

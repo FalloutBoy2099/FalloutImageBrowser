@@ -14,12 +14,12 @@ serde = { version = "1", features = ["derive"] }
 anyhow = "1"
 flate2 = "1"
 rayon = "1"
-rfd = "0.15"
+rfd = "0.17"
 sys-locale = "0.3"
-color_quant = "1"
-sha2 = "0.10"
-gif = "0.13"
-tiff = "0.10"
+color_quant = "2"
+sha2 = "0.11"
+gif = "0.14"
+tiff = "0.11"
 jpeg-encoder = "0.7"
 kamadak-exif = "0.6"
 texture2ddecoder = "0.1"
@@ -30,7 +30,7 @@ sevenz-rust2 = { version = "0.24", default-features = false }
 zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Registry", "Win32_Security", "Win32_Foundation", "Win32_UI_Shell", "Win32_System_Com"] }
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Registry", "Win32_Security", "Win32_Foundation", "Win32_UI_Shell", "Win32_System_Com"] }
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "dx12", "vulkan"] }
 
 [profile.dev]
@@ -68,4 +68,4 @@ path = "assets/genicon.rs"
 [dev-dependencies]
 # Validité du JSON et du XML produits par les boutons « copier les informations ».
 serde_json = "1"
-roxmltree = "0.20"
+roxmltree = "0.21"

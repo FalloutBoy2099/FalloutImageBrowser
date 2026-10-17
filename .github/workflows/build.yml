@@ -42,7 +42,7 @@ jobs:
       matrix:
         os: [ubuntu-22.04, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -83,7 +83,7 @@ jobs:
           - { key: macos-x64,     os: macos-latest,     target: x86_64-apple-darwin,       test: false }
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -147,7 +147,7 @@ jobs:
           - { key: windows-x64,   target: x86_64-pc-windows-msvc,  test: true }
           - { key: windows-arm64, target: aarch64-pc-windows-msvc, test: false }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -194,7 +194,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: The tag must match the version in Cargo.toml
         run: |

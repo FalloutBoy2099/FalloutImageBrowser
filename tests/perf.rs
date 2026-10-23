@@ -201,6 +201,7 @@ fn png_levels_all_decode_to_the_same_pixels() {
             bg: [0, 0, 0],
             enc: EncodeOpts { jpeg_quality: 92, png_level: level },
             ops: Default::default(),
+            text_white: false,
         };
         let bytes = convert_to_bytes(&pic, &opt, &Selection::default()).unwrap();
         let back = formats::decode(Format::Png, &bytes, &ctx).unwrap();

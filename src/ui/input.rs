@@ -28,8 +28,9 @@ impl App {
                 return;
             }
         }
-        // La fenêtre de conversion est modale : rien d'autre ne réagit.
+        // Les fenêtres modales (conversion, À propos...) bloquent tout le reste : rien d'autre ne réagit.
         if self.conv.open
+            || self.show_about
             || self.pal_dlg.open
             || self.expand_confirm.is_some()
             || self.folder_dlg.is_some()
@@ -181,7 +182,7 @@ impl App {
             self.settings.show_all_dirs = !self.settings.show_all_dirs;
         }
         if pressed(Key::A) {
-            self.settings.show_origin = !self.settings.show_origin;
+            self.settings.origin = self.settings.origin.next();
         }
         if pressed(Key::S) {
             self.toggle_slideshow(ctx);

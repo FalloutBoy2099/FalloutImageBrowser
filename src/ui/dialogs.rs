@@ -218,29 +218,56 @@ impl App {
     }
 
     pub fn about_window(&mut self, ctx: &egui::Context) {
-        let mut open = self.show_about;
-        extra_window(ctx, self.settings.taskbar_windows, "about_window", tr("m.about"), [540.0, 520.0], false, true, &mut open, |ui| {
-            ui.set_min_width(480.0);
-            ui.horizontal(|ui| {
-                ui.heading("Fallout Image Browser");
-                ui.label(egui::RichText::new("by Kain").italics());
+        if !self.show_about {
+            return;
+        }
+        let mut close = false;
+        // Fenêtre modale : le reste de l'interface est bloqué tant qu'elle est ouverte (Échap ou × pour fermer).
+        // Modal : le fond assombri bloque l'interface ; seuls le bouton × de la barre de titre ou Échap ferment la fenêtre.
+        // Même présentation que « À propos » de FalloutWorldStudio : barre de titre pleine largeur, contenu dans un cadre à marge.
+        let frame = egui::Frame::popup(&ctx.global_style()).inner_margin(egui::Margin::ZERO).corner_radius(egui::CornerRadius::same(10));
+        egui::Modal::new(Id::new("about_modal")).frame(frame).show(ctx, |ui| {
+            ui.set_width(520.0);
+            let header = egui::Frame::new()
+                .fill(ui.visuals().widgets.inactive.weak_bg_fill)
+                .corner_radius(egui::CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 })
+                .inner_margin(egui::Margin::symmetric(16, 8));
+            header.show(ui, |ui| {
+                let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), egui::Sense::hover());
+                ui.painter().text(bar.center(), Align2::CENTER_CENTER, tr("m.about"), egui::FontId::proportional(18.0), ui.visuals().weak_text_color());
+                let x = egui::Button::new(egui::RichText::new("×").size(22.0)).frame(false);
+                let x_rect = egui::Rect::from_center_size(egui::pos2(bar.right() - 12.0, bar.center().y), vec2(28.0, 28.0));
+                if ui.put(x_rect, x).on_hover_text(tr("c.close")).clicked() {
+                    close = true;
+                }
             });
-            ui.label(egui::RichText::new(format!("v{}  ·  Rust + egui + wgpu", env!("CARGO_PKG_VERSION"))).weak());
-            ui.label(egui::RichText::new(tr("about.based")).weak());
-            ui.add_space(4.0);
-            ui.separator();
-            ui.label(egui::RichText::new(tr("about.formats")).strong());
-            ui.add(egui::Label::new(Format::ALL.iter().map(|f| f.name()).collect::<Vec<_>>().join("  ·  ")).extend());
-            ui.label(egui::RichText::new(tr("about.readonly")).weak().small());
-            ui.add(egui::Label::new(Format::READ_ONLY.iter().filter(|f| **f != Format::Palette).map(|f| f.name()).collect::<Vec<_>>().join("  ·  ")).extend());
-            ui.label(egui::RichText::new(tr("about.palettes")).weak().small());
-            ui.label("PAL  ·  ACT  ·  GPL  ·  KPL  ·  HEX");
-            ui.add_space(4.0);
-            ui.separator();
-            ui.label(egui::RichText::new(tr("about.keys_title")).strong());
-            ui.label(tr("about.keys"));
+            egui::Frame::new().inner_margin(egui::Margin::same(16)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading("Fallout Image Browser");
+                    ui.label(egui::RichText::new("by Kain").italics());
+                });
+                ui.label(egui::RichText::new(format!("v{}  ·  Rust + egui + wgpu", env!("CARGO_PKG_VERSION"))).weak());
+                ui.label(egui::RichText::new(tr("about.based")).weak());
+                ui.add_space(4.0);
+                ui.separator();
+                ui.label(egui::RichText::new(tr("about.formats")).strong());
+                ui.add(egui::Label::new(Format::ALL.iter().map(|f| f.name()).collect::<Vec<_>>().join("  ·  ")).wrap());
+                ui.label(egui::RichText::new(tr("about.readonly")).weak().small());
+                ui.add(egui::Label::new(Format::READ_ONLY.iter().filter(|f| **f != Format::Palette).map(|f| f.name()).collect::<Vec<_>>().join("  ·  ")).wrap());
+                ui.label(egui::RichText::new(tr("about.palettes")).weak().small());
+                ui.label("PAL  ·  ACT  ·  GPL  ·  KPL  ·  HEX");
+                ui.add_space(4.0);
+                ui.separator();
+                ui.label(egui::RichText::new(tr("about.keys_title")).strong());
+                ui.label(tr("about.keys"));
+                ui.add_space(4.0);
+                ui.separator();
+                ui.label(format!("{}: {}", tr("m.language"), i18n::lang().native_name()));
+            });
         });
-        self.show_about = open;
+        if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.show_about = false;
+        }
     }
 
     pub fn toast_overlay(&mut self, ctx: &egui::Context) {
@@ -252,6 +279,8 @@ impl App {
         let msg = msg.clone();
         egui::Area::new(Id::new("toast")).order(egui::Order::Tooltip).anchor(Align2::CENTER_BOTTOM, vec2(0.0, -48.0)).show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
+                // Large : un nom de fichier long (identifiant) reste sur une ligne tant que la fenêtre le permet.
+                ui.set_max_width((ctx.content_rect().width() * 0.9).min(1000.0));
                 ui.label(msg);
             });
         });

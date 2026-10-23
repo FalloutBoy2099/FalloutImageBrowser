@@ -150,7 +150,7 @@ fn seeds() -> Vec<(Format, String, Vec<u8>)> {
             .map(|(_, d)| d)
             .collect();
         for depth in depths {
-            let o = ConvertOptions { format: f, depth, dither: false, bg: [0; 3], enc: Default::default(), ops: Default::default() };
+            let o = ConvertOptions { format: f, depth, dither: false, bg: [0; 3], enc: Default::default(), ops: Default::default(), text_white: false };
             if let Ok(b) = convert_to_bytes(&pic, &o, &Selection::default()) {
                 v.push((f, format!("{} #{}", f.name(), v.len()), b));
             }

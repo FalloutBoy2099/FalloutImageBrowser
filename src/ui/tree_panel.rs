@@ -49,7 +49,8 @@ impl App {
         if let Some(p) = open {
             if crate::dat::stat(&p).is_some() || p.is_dir() {
                 self.open_dir(ctx, &p, false);
-                self.reveal_in_tree();
+                // Faire défiler jusqu'au dossier choisi (et non jusqu'au fichier affiché, qui peut être ailleurs).
+                self.tree_scroll_to = self.tree.rows.iter().position(|r| r.path == p);
             } else {
                 self.toast(tr("t.folder_missing"));
             }
@@ -168,6 +169,10 @@ impl App {
                         ctx_act = Some((row.path.clone(), 0));
                         ui.close();
                     }
+                    if ui.add_enabled(is_dir, egui::Button::new(tr("t.collapse_children"))).clicked() {
+                        ctx_act = Some((row.path.clone(), 7));
+                        ui.close();
+                    }
                     if ui.button(tr("t.collapse_others")).clicked() {
                         ctx_act = Some((row.path.clone(), 1));
                         ui.close();
@@ -223,6 +228,8 @@ impl App {
                 }
             } else if what == 6 {
                 self.open_anim_dialog(&path);
+            } else if what == 7 {
+                self.tree.collapse_children(&path);
             } else {
                 self.tree.collapse_others(&path);
             }

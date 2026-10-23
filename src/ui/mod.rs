@@ -4,6 +4,7 @@ mod actions;
 mod bg_picker;
 mod canvas;
 mod dialogs;
+mod histogram;
 mod input;
 mod menu;
 mod props_panel;

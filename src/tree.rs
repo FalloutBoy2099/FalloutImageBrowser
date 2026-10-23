@@ -446,6 +446,16 @@ impl Tree {
         self.rebuild();
     }
 
+    /// Replie tous les descendants de `path` (le dossier lui-même reste tel quel).
+    pub fn collapse_children(&mut self, path: &Path) {
+        if let Some(node) = Self::find_mut(&mut self.roots, path) {
+            for c in &mut node.children {
+                c.collapse_subtree();
+            }
+        }
+        self.rebuild();
+    }
+
     pub fn collapse_others(&mut self, path: &Path) {
         for r in &mut self.roots {
             r.collapse_others(path);

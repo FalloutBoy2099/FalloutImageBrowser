@@ -139,7 +139,7 @@ pub fn build_animation(dir: &Path, out_dir: &Path, name: &str, format: Format, p
         (Format::Frm, _) => PalChoice::Fallout,
         _ => PalChoice::Adaptive,
     };
-    let opts = ConvertOptions { format, depth: DepthChoice::Indexed(pal), dither: false, bg: [0, 0, 0], enc: EncodeOpts::default(), ops: ImageOps::default() };
+    let opts = ConvertOptions { format, depth: DepthChoice::Indexed(pal), dither: false, bg: [0, 0, 0], enc: EncodeOpts::default(), ops: ImageOps::default(), text_white: false };
     let prep = prepare(&pic, &opts, &Selection::default()).map_err(|e| e.to_string())?;
     let bytes = formats::encode(&prep, &opts.enc).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;

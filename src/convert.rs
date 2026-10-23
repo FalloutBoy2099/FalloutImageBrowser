@@ -7,6 +7,9 @@ use crate::palette::{self, Mapper};
 use anyhow::{Result, bail};
 use std::sync::Arc;
 
+/// Index de palette que le jeu utilise pour le texte des sous-titres (écrans de mort) : blanc dans une palette créée.
+const TEXT_INDEX: usize = 220;
+
 #[derive(Clone)]
 pub enum PalChoice {
     /// Palette propre à l'image (conservée ou calculée).
@@ -47,6 +50,8 @@ pub struct ConvertOptions {
     pub enc: EncodeOpts,
     /// Retouches (taille, marges, méthode de tramage) appliquées avant l'encodage.
     pub ops: ImageOps,
+    /// Palette créée : forcer l'index 220 à blanc (sous-titres des écrans de mort).
+    pub text_white: bool,
 }
 
 /// Image / direction à exporter pour les formats à image unique.
@@ -173,6 +178,18 @@ pub fn prepare(pic: &Picture, opt: &ConvertOptions, sel: &Selection) -> Result<P
                     let refs: Vec<&[u8]> = rgbas.iter().map(|v| &v[..]).collect();
                     let mut p = palette::adaptive_palette(&refs, true, opt.bg);
                     palette::snap_6bit(&mut p);
+                    if opt.text_white {
+                        // Écrans de mort (deathscreens) : le moteur affiche les sous-titres avec l'index 220, qui doit être blanc.
+                        // Les autres index restent à l'image : la couleur qui occupait 220 passe sur un index libre (s'il y en a un).
+                        if p.used[TEXT_INDEX]
+                            && let Some(free) = (1..256usize).find(|&i| i != TEXT_INDEX && !p.used[i])
+                        {
+                            p.colors[free] = p.colors[TEXT_INDEX];
+                            p.used[free] = true;
+                        }
+                        p.colors[TEXT_INDEX] = [252, 252, 252, 255];
+                        p.used[TEXT_INDEX] = true;
+                    }
                     (p, Some(0), true, false)
                 }
                 PalChoice::Adaptive => {

@@ -37,7 +37,7 @@ fn temp_dir(name: &str) -> PathBuf {
 }
 
 fn opts(format: Format, depth: DepthChoice, ops: ImageOps) -> ConvertOptions {
-    ConvertOptions { format, depth, dither: false, bg: [0, 0, 0], enc: EncodeOpts::default(), ops }
+    ConvertOptions { format, depth, dither: false, bg: [0, 0, 0], enc: EncodeOpts::default(), ops, text_white: false }
 }
 
 fn encode(pic: &Picture, o: &ConvertOptions) -> Vec<u8> {
@@ -392,4 +392,19 @@ fn estimate_sizes_are_written_briefly() {
     assert_eq!(short_size(512), "512 B");
     assert_eq!(short_size(2048), "2.0 KiB");
     assert_eq!(short_size(3 * 1024 * 1024), "3.00 MiB");
+}
+
+// ----------------------------------------------------------------------------- palette créée : index 220 blanc
+
+#[test]
+fn created_palette_can_force_index_220_to_white() {
+    // 200 couleurs sombres distinctes : la palette exacte occupe les index 1..=200 ; aucune n'est blanche.
+    let pic = rgba_picture(20, 10, |x, y| [(x * 8) as u8, (y * 20) as u8, 40, 255]);
+    let mut o = opts(Format::Frm, DepthChoice::Indexed(PalChoice::Create), ImageOps::default());
+    let free = prepare(&pic, &o, &Selection::default()).unwrap().palette.unwrap();
+    o.text_white = true;
+    let forced = prepare(&pic, &o, &Selection::default()).unwrap().palette.unwrap();
+    assert_ne!(forced.colors[220], free.colors[220]);
+    assert_eq!(&forced.colors[220][..3], &[252, 252, 252]);
+    assert!(forced.used[220]);
 }

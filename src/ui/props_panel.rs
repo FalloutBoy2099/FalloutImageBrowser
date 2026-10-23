@@ -2,7 +2,8 @@
 
 use crate::app::App;
 use crate::i18n::{self, tr};
-use crate::icons::{Icon, icon_button};
+use crate::model::frame_to_rgba;
+use crate::icons::{Icon, icon_button, small_icon_button};
 use crate::props::{collect_props, props_json, props_text, props_xml};
 use eframe::egui::{self, Color32, Ui, vec2};
 
@@ -26,6 +27,56 @@ enum PropAction {
 }
 
 impl App {
+    /// Bloc « Couleurs » : couleurs 1 (clic gauche) et 2 (clic droit) avec leur valeur hexadécimale et RVB, en colonnes alignées.
+    pub fn colors_block(&mut self, ui: &mut Ui) {
+        ui.add_space(4.0);
+        ui.heading(tr("colors_title"));
+        ui.separator();
+        let mut copy: Option<String> = None;
+        // Trois colonnes : pastille, puis deux valeurs (chacune suivie de son bouton de copie) ; deux lignes par couleur.
+        egui::Grid::new("colors_grid").num_columns(3).min_col_width(0.0).spacing([14.0, 1.0]).show(ui, |ui| {
+            // Largeur fixe du texte (la valeur la plus longue) : les boutons de copie restent alignés quelles que soient les valeurs.
+            let font = egui::FontId::monospace(11.0);
+            let text_w = ui.painter().layout_no_wrap("255, 255, 255, 255".to_string(), font, Color32::WHITE).size().x.ceil();
+            let mut value = |ui: &mut Ui, text: String, tip: &str| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    ui.allocate_ui_with_layout(vec2(text_w, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        // Sans largeur minimale, la cellule se réduit au texte et le bouton suivant se décale.
+                        ui.set_min_size(vec2(text_w, 20.0));
+                        ui.add(egui::Label::new(egui::RichText::new(&text).monospace().size(11.0)).truncate());
+                    });
+                    if small_icon_button(ui, Icon::Copy, &tr(tip)).clicked() {
+                        copy = Some(text);
+                    }
+                });
+            };
+            for (n, c) in [self.settings.color1, self.settings.color2].into_iter().enumerate() {
+                if n > 0 {
+                    ui.add_space(4.0);
+                    ui.end_row();
+                }
+                let (rect, _) = ui.allocate_exact_size(vec2(28.0, 16.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 3.0, Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]));
+                ui.painter().rect_stroke(rect, 3.0, egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.fg_stroke.color), egui::StrokeKind::Inside);
+                value(ui, crate::view::hex_color(c), "t.copy_hex");
+                value(ui, if c[3] == 255 { format!("{}, {}, {}", c[0], c[1], c[2]) } else { format!("{}, {}, {}, {}", c[0], c[1], c[2], c[3]) }, "t.copy_rgb");
+                ui.end_row();
+                let (h, sl, l, sv, v) = hsl_hsv(c);
+                ui.label("");
+                value(ui, format!("{h}° {sl}% {l}%"), "t.copy_hsl");
+                value(ui, format!("{h}° {sv}% {v}%"), "t.copy_hsv");
+                ui.end_row();
+            }
+        });
+        if let Some(t) = copy {
+            ui.ctx().copy_text(t);
+            self.toast(tr("t.copied"));
+        }
+        ui.add_space(4.0);
+        ui.separator();
+    }
+
     pub fn props_panel(&mut self, ui: &mut Ui) {
         ui.add_space(4.0);
         ui.heading(tr("properties"));
@@ -85,6 +136,7 @@ impl App {
             });
             ui.add_space(3.0);
         });
+        let mut picked: Option<(bool, [u8; 4])> = None;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             for (sid, sec) in pic.sections.iter().enumerate() {
                 egui::CollapsingHeader::new(egui::RichText::new(tr(&sec.title)).strong()).id_salt(("sec", &sec.title)).default_open(sec.title != "sec.exif").show(ui, |ui| {
@@ -127,10 +179,29 @@ impl App {
             }
             if let Some(pal) = pic.palette.as_ref().or(pic.colors.as_ref()) {
                 egui::CollapsingHeader::new(egui::RichText::new(tr("sec.palette")).strong()).default_open(true).show(ui, |ui| {
-                    palette_grid(ui, pal);
+                    picked = palette_grid(ui, pal);
                 });
             }
+            // Histogramme de l'image courante (calculé une fois par image affichée).
+            let f = &pic.frames[pic.frame_index(s.dir, s.frame)];
+            let key = egui::Id::new(("histogram", std::sync::Arc::as_ptr(&s.loaded) as usize, s.dir, s.frame));
+            let hist: std::sync::Arc<super::histogram::Histogram> = match ui.memory_mut(|m| m.data.get_temp(key)) {
+                Some(h) => h,
+                None => {
+                    let h = std::sync::Arc::new(super::histogram::compute(&frame_to_rgba(f, pic.palette.as_ref())));
+                    ui.memory_mut(|m| m.data.insert_temp(key, h.clone()));
+                    h
+                }
+            };
+            egui::CollapsingHeader::new(egui::RichText::new(tr("sec.histogram")).strong()).default_open(true).show(ui, |ui| super::histogram::show(ui, &hist, &mut self.settings.histo));
         });
+        if let Some((second, c)) = picked {
+            if second {
+                self.settings.color2 = c;
+            } else {
+                self.settings.color1 = c;
+            }
+        }
         let ctx = ui.ctx().clone();
         let info = match action {
             Some(PropAction::Text) => Some(props_text(&collect_props(pic, s.dir, s.frame))),
@@ -163,4 +234,25 @@ impl App {
             _ => {}
         }
     }
+}
+
+/// Teinte (degrés), puis saturation et luminosité (TSL), puis saturation et valeur (TSV), en entiers (pourcentages).
+fn hsl_hsv(c: [u8; 4]) -> (u32, u32, u32, u32, u32) {
+    let [r, g, b] = [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0];
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let d = max - min;
+    let h = if d == 0.0 {
+        0.0
+    } else if max == r {
+        60.0 * ((g - b) / d).rem_euclid(6.0)
+    } else if max == g {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    let l = (max + min) / 2.0;
+    let sl = if d == 0.0 { 0.0 } else { d / (1.0 - (2.0 * l - 1.0).abs()) };
+    let sv = if max == 0.0 { 0.0 } else { d / max };
+    let p = |x: f32| (x * 100.0).round() as u32;
+    ((h.round() as u32) % 360, p(sl), p(l), p(sv), p(max))
 }

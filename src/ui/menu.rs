@@ -1,6 +1,6 @@
 //! Barre de menus.
 
-use crate::app::{App, Smoothing};
+use crate::app::{App, OriginStyle, Smoothing, ThemeChoice};
 use crate::i18n::{self, Lang, tr};
 use crate::loader::PalPolicy;
 use crate::model::*;
@@ -47,11 +47,12 @@ impl App {
                 if item(ui, tr("m.extract_pal"), "Ctrl+P", has_img) {
                     self.open_palette_dialog();
                 }
-                if item(ui, tr("m.batch"), "Ctrl+B", true) {
-                    self.open_batch();
-                }
                 if item(ui, tr("m.edit_frm"), "", is_frm) {
                     self.open_frm_editor();
+                }
+                ui.separator();
+                if item(ui, tr("m.batch"), "Ctrl+B", true) {
+                    self.open_batch();
                 }
                 ui.separator();
                 if item(ui, tr("m.open_default"), "Ctrl+Enter", has_img) {
@@ -65,6 +66,7 @@ impl App {
             // Affichage : panneaux, ajustement, plein écran, diaporama, lecture et lissage.
             ui.menu_button(tr("m.view"), |ui| {
                 ui.checkbox(&mut self.settings.show_tree, tr("t.tree"));
+                ui.checkbox(&mut self.settings.show_colors, tr("colors"));
                 ui.checkbox(&mut self.settings.show_props, tr("properties"));
                 ui.separator();
                 if item(ui, tr("m.fit"), "F", has_img) {
@@ -119,7 +121,13 @@ impl App {
                 ui.separator();
                 ui.checkbox(&mut self.settings.show_grid, format!("{}  [G]", tr("m.grid")));
                 ui.checkbox(&mut self.settings.show_pixel_info, tr("m.pixel_info"));
-                ui.checkbox(&mut self.settings.show_origin, format!("{}  [A]", tr("m.origin")));
+                ui.menu_button(format!("{}  [A]", tr("m.origin")), |ui| {
+                    for st in OriginStyle::ALL {
+                        if ui.radio_value(&mut self.settings.origin, st, tr(st.key())).clicked() {
+                            ui.close();
+                        }
+                    }
+                });
                 ui.checkbox(&mut self.settings.onion, format!("{}  [O]", tr("m.onion")));
                 let can_all = self.shown.as_ref().is_some_and(|s| can_show_all_dirs(&s.loaded.pic));
                 ui.add_enabled(can_all, egui::Checkbox::new(&mut self.settings.show_all_dirs, format!("{}  [D]", tr("m.all_dirs"))));
@@ -194,13 +202,25 @@ impl App {
                     self.open_palette_dialog();
                 }
             });
-            ui.menu_button(tr("m.language"), |ui| {
-                for l in Lang::ALL {
-                    if ui.radio(i18n::lang() == l, l.native_name()).clicked() {
-                        self.set_language(&ctx, l);
-                        ui.close();
+            // Paramètres : langue et thème (système, sombre ou clair).
+            ui.menu_button(tr("m.settings"), |ui| {
+                ui.menu_button(tr("m.language"), |ui| {
+                    for l in Lang::ALL {
+                        if ui.radio(i18n::lang() == l, l.native_name()).clicked() {
+                            self.set_language(&ctx, l);
+                            ui.close();
+                        }
                     }
-                }
+                });
+                ui.menu_button(tr("m.theme"), |ui| {
+                    for t in [ThemeChoice::System, ThemeChoice::Dark, ThemeChoice::Light] {
+                        if ui.radio(self.settings.theme == t, tr(t.key())).clicked() {
+                            self.settings.theme = t;
+                            ctx.set_theme(t.preference());
+                            ui.close();
+                        }
+                    }
+                });
             });
             ui.menu_button(tr("m.help"), |ui| {
                 // Associations de fichiers (indisponibles sous macOS : il faudrait un bundle d'application).

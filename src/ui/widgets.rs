@@ -94,9 +94,10 @@ pub(super) fn gradient_slider(ui: &mut Ui, value: &mut f32, width: f32, track: i
     changed
 }
 
-pub(super) fn palette_grid(ui: &mut Ui, pal: &Palette) {
+/// Grille de la palette ; renvoie la couleur cliquée avec Alt (`true` = clic droit).
+pub(super) fn palette_grid(ui: &mut Ui, pal: &Palette) -> Option<(bool, [u8; 4])> {
     let cell = 12.0;
-    let (rect, resp) = ui.allocate_exact_size(vec2(cell * 16.0, cell * 16.0), Sense::hover());
+    let (rect, resp) = ui.allocate_exact_size(vec2(cell * 16.0, cell * 16.0), Sense::click());
     let painter = ui.painter_at(rect);
     for i in 0..256usize {
         let (x, y) = (i % 16, i / 16);
@@ -109,11 +110,17 @@ pub(super) fn palette_grid(ui: &mut Ui, pal: &Palette) {
             painter.line_segment([r.left_top(), r.right_bottom()], Stroke::new(1.0, Color32::from_gray(90)));
         }
     }
+    let alt = ui.input(|i| i.modifiers.alt);
+    let (left, right) = (alt && resp.clicked(), alt && resp.secondary_clicked());
+    let mut picked = None;
     if let Some(p) = resp.hover_pos() {
         let (x, y) = (((p.x - rect.left()) / cell) as usize, ((p.y - rect.top()) / cell) as usize);
         if x < 16 && y < 16 {
             let i = y * 16 + x;
             let c = pal.colors[i];
+            if left || right {
+                picked = Some((right, if pal.used[i] { c } else { [0, 0, 0, 255] }));
+            }
             resp.on_hover_text(format!(
                 "#{i}   RGB {}, {}, {}   #{:02X}{:02X}{:02X}{}",
                 c[0],
@@ -132,4 +139,5 @@ pub(super) fn palette_grid(ui: &mut Ui, pal: &Palette) {
             ));
         }
     }
+    picked
 }

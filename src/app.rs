@@ -22,12 +22,128 @@ pub enum Smoothing {
     Off,
 }
 
+/// Repère d'ancrage (origine) : désactivé, point, croix ou cible (cercle et croix).
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Debug)]
+pub enum OriginStyle {
+    #[default]
+    Off,
+    Dot,
+    Cross,
+    Target,
+}
+
+impl OriginStyle {
+    pub const ALL: [OriginStyle; 4] = [OriginStyle::Off, OriginStyle::Dot, OriginStyle::Cross, OriginStyle::Target];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            OriginStyle::Off => "m.origin_off",
+            OriginStyle::Dot => "m.origin_dot",
+            OriginStyle::Cross => "m.origin_cross",
+            OriginStyle::Target => "m.origin_target",
+        }
+    }
+
+    /// Style suivant (raccourci A) : revient à « désactivé » après la cible.
+    pub fn next(self) -> OriginStyle {
+        let i = OriginStyle::ALL.iter().position(|s| *s == self).unwrap_or(0);
+        OriginStyle::ALL[(i + 1) % OriginStyle::ALL.len()]
+    }
+}
+
+/// Thème de l'interface : celui du système, sombre ou clair.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Debug)]
+pub enum ThemeChoice {
+    #[default]
+    System,
+    Dark,
+    Light,
+}
+
+impl ThemeChoice {
+    pub fn preference(self) -> egui::ThemePreference {
+        match self {
+            ThemeChoice::System => egui::ThemePreference::System,
+            ThemeChoice::Dark => egui::ThemePreference::Dark,
+            ThemeChoice::Light => egui::ThemePreference::Light,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            ThemeChoice::System => "m.theme_system",
+            ThemeChoice::Dark => "m.theme_dark",
+            ThemeChoice::Light => "m.theme_light",
+        }
+    }
+}
+
+/// Échelle verticale de l'histogramme.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Debug)]
+pub enum HistoScale {
+    #[default]
+    Linear,
+    Sqrt,
+    Log,
+}
+
+impl HistoScale {
+    pub fn key(self) -> &'static str {
+        match self {
+            HistoScale::Linear => "histo.lin",
+            HistoScale::Sqrt => "histo.sqrt",
+            HistoScale::Log => "histo.log",
+        }
+    }
+}
+
+/// Présentation de l'histogramme : barres remplies ou courbes.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Debug)]
+pub enum HistoStyle {
+    #[default]
+    Bars,
+    Curve,
+}
+
+impl HistoStyle {
+    pub fn key(self) -> &'static str {
+        match self {
+            HistoStyle::Bars => "histo.bars",
+            HistoStyle::Curve => "histo.curve",
+        }
+    }
+}
+
+/// Réglages de l'histogramme : canaux affichés (R, V, B, luminance), échelle, remplissage, grille et indicateurs d'écrêtage.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HistoSettings {
+    pub channels: [bool; 4],
+    pub scale: HistoScale,
+    pub style: HistoStyle,
+    pub grid: bool,
+    pub clip: bool,
+}
+
+impl Default for HistoSettings {
+    fn default() -> Self {
+        HistoSettings { channels: [true, true, true, false], scale: HistoScale::Sqrt, style: HistoStyle::Curve, grid: true, clip: true }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Settings {
+    pub theme: ThemeChoice,
+    pub histo: HistoSettings,
     pub lang: Option<Lang>,
     pub show_tree: bool,
     pub show_props: bool,
+    /// Bloc « Couleurs » (couleurs 1 et 2) au-dessus des propriétés.
+    pub show_colors: bool,
+    /// Couleurs 1 (clic gauche) et 2 (clic droit) prélevées sur l'image ou la palette (RGBA).
+    pub color1: [u8; 4],
+    pub color2: [u8; 4],
     /// Tri des fichiers d'un dossier.
     pub sort: crate::tree::SortKey,
     pub sort_desc: bool,
@@ -41,7 +157,7 @@ pub struct Settings {
     pub bg_recent: Vec<[u8; 3]>,
     pub show_grid: bool,
     pub show_pixel_info: bool,
-    pub show_origin: bool,
+    pub origin: OriginStyle,
     /// Toutes les directions d'un FRM (ou ART) côte à côte.
     pub show_all_dirs: bool,
     pub onion: bool,
@@ -76,6 +192,11 @@ impl Default for Settings {
             lang: None,
             show_tree: true,
             show_props: false,
+            show_colors: false,
+            theme: Default::default(),
+            histo: Default::default(),
+            color1: [0, 0, 0, 255],
+            color2: [255, 255, 255, 255],
             sort: Default::default(),
             sort_desc: false,
             background: Default::default(),
@@ -84,7 +205,7 @@ impl Default for Settings {
             bg_recent: Vec::new(),
             show_grid: false,
             show_pixel_info: true,
-            show_origin: false,
+            origin: OriginStyle::Off,
             show_all_dirs: false,
             onion: false,
             slideshow_secs: 3,
@@ -264,6 +385,7 @@ impl App {
         let forced = std::env::var("FIB_LANG").ok().and_then(|c| Lang::ALL.iter().copied().find(|l| l.code() == c.to_lowercase()));
         let lang = forced.or(settings.lang).unwrap_or_else(Lang::detect);
         i18n::set_lang(lang);
+        cc.egui_ctx.set_theme(settings.theme.preference());
         let mut app = App {
             tree: Tree::new(),
             files: Vec::new(),
@@ -655,8 +777,15 @@ impl eframe::App for App {
         if self.settings.show_tree {
             egui::Panel::left("tree").resizable(true).default_size(270.0).size_range(120.0..=700.0).show(ui, |ui| self.tree_panel(ui));
         }
-        if self.settings.show_props {
-            egui::Panel::right("props").resizable(true).default_size(320.0).size_range(160.0..=800.0).show(ui, |ui| self.props_panel(ui));
+        if self.settings.show_props || self.settings.show_colors {
+            egui::Panel::right("props").resizable(true).default_size(320.0).size_range(160.0..=800.0).show(ui, |ui| {
+                if self.settings.show_colors {
+                    self.colors_block(ui);
+                }
+                if self.settings.show_props {
+                    self.props_panel(ui);
+                }
+            });
         }
         egui::CentralPanel::no_frame().show(ui, |ui| self.canvas(ui));
         self.poll_extract(&ctx);

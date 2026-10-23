@@ -62,6 +62,8 @@ pub struct ConvSettings {
     pub last_out_dir: Option<PathBuf>,
     /// Palette personnalisée : créer le fichier .PAL à partir de l'image (sinon choisir un .PAL existant).
     pub create_pal: bool,
+    /// Palette créée : forcer l'index 220 à blanc (sous-titres des écrans de mort).
+    pub text_white: bool,
 }
 
 impl Default for ConvSettings {
@@ -82,6 +84,7 @@ impl Default for ConvSettings {
             pal_path: None,
             last_out_dir: None,
             create_pal: true,
+            text_white: false,
         }
     }
 }
@@ -178,6 +181,7 @@ impl ConvertUi {
             bg: self.s.bg,
             enc: EncodeOpts { jpeg_quality: self.s.jpeg_quality, png_level: self.s.png_level },
             ops: ImageOps { resize: self.s.resize, resample: self.s.resample, trim: self.s.trim, dither_method: self.s.dither_method },
+            text_white: self.s.text_white,
         })
     }
 
@@ -239,6 +243,9 @@ impl ConvertUi {
             ui.label(tr("c.pal_file"));
             ui.horizontal(|ui| {
                 ui.checkbox(&mut self.s.create_pal, tr("c.pal_create"));
+                if self.s.create_pal {
+                    ui.checkbox(&mut self.s.text_white, tr("c.pal_white220")).on_hover_text(tr("c.pal_white220_tip"));
+                }
                 ui.add_enabled_ui(!self.s.create_pal, |ui| {
                     if ui.button(tr("c.browse")).clicked()
                         && let Some(p) = rfd::FileDialog::new().add_filter("PAL", &["pal", "PAL"]).pick_file()
@@ -353,7 +360,7 @@ impl ConvertUi {
     fn signature(&self) -> String {
         let s = &self.s;
         format!(
-            "{}|{:?}|{}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{:?}|{}|{:?}",
+            "{}|{:?}|{}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{:?}|{}|{}|{:?}",
             s.fmt,
             s.depth,
             s.dither,
@@ -366,6 +373,7 @@ impl ConvertUi {
             s.jpeg_quality,
             s.pal_path,
             s.create_pal,
+            s.text_white,
             self.source.as_ref().map(|(l, sel)| (l.path.clone(), sel.dir, sel.frame))
         )
     }
@@ -449,6 +457,35 @@ impl App {
         self.conv.estimate = Estimate::default();
         self.conv.fix_depth();
         self.conv.open = true;
+    }
+
+    /// Conversion en un clic de l'image affichée, à côté du fichier source (même nom, extension du format) : FRM (palette Fallout),
+    /// FRM avec un .PAL créé à partir de l'image (index 220 blanc pour les écrans de mort si `text_white`), ou RIX.
+    pub fn quick_convert(&mut self, format: Format, with_pal: bool, text_white: bool) {
+        let Some(s) = &self.shown else { return };
+        let (loaded, sel) = (s.loaded.clone(), Selection { dir: s.dir, frame: s.frame });
+        let Some(out_dir) = crate::dat::real_parent(&loaded.path) else { return };
+        let settings = ConvSettings {
+            fmt: format.ext().to_string(),
+            depth: match (format, with_pal) {
+                (Format::Frm, true) => DepthKind::Custom8,
+                (Format::Frm, false) => DepthKind::Fallout8,
+                _ => DepthKind::Pal8,
+            },
+            create_pal: true,
+            text_white,
+            ..ConvSettings::default()
+        };
+        let Some(opts) = ConvertUi::new(&settings).options() else { return };
+        let job = Job { opts, seq: false, policy: self.policy.clone() };
+        match batch::convert_loaded(&loaded, &sel, &job, &out_dir, None) {
+            Ok(files) => {
+                let what = files.first().and_then(|f| f.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                self.toast(trf("c.done", &[("file", what)]));
+                self.refresh_if_current(Some(out_dir));
+            }
+            Err(e) => self.toast(e),
+        }
     }
 
     fn start_conversion(&mut self, ctx: &egui::Context) {

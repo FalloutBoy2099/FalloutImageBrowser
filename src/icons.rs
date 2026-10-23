@@ -20,6 +20,7 @@ pub enum Icon {
     Sha,
     Folder,
     CopyText,
+    Copy,
     CopyJson,
     CopyXml,
     Close,
@@ -33,7 +34,15 @@ pub enum Icon {
 }
 
 pub fn icon_button(ui: &mut Ui, icon: Icon, tip: &str, selected: bool, enabled: bool) -> Response {
-    let size = vec2(32.0, 28.0);
+    sized_icon_button(ui, icon, tip, selected, enabled, vec2(32.0, 28.0), vec2(6.0, 4.0))
+}
+
+/// Petit bouton à icône (22 × 20), pour les tableaux denses.
+pub fn small_icon_button(ui: &mut Ui, icon: Icon, tip: &str) -> Response {
+    sized_icon_button(ui, icon, tip, false, true, vec2(22.0, 20.0), vec2(3.0, 2.0))
+}
+
+fn sized_icon_button(ui: &mut Ui, icon: Icon, tip: &str, selected: bool, enabled: bool, size: Vec2, pad: Vec2) -> Response {
     let (rect, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
     let visuals = ui.visuals();
     let style = if !enabled {
@@ -56,7 +65,7 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, tip: &str, selected: bool, enabled: 
     if selected {
         fg = visuals.selection.stroke.color;
     }
-    paint_icon(ui, rect.shrink2(vec2(6.0, 4.0)), icon, fg);
+    paint_icon(ui, rect.shrink2(pad), icon, fg);
     resp.on_hover_text(tip)
 }
 
@@ -100,6 +109,14 @@ fn paint_icon(ui: &Ui, r: Rect, icon: Icon, c: Color32) {
                 let y = q.top() + 4.5 + i as f32 * 3.6;
                 p.line_segment([pos2(q.left() + 3.0, y), pos2(q.right() - 3.0, y)], Stroke::new(1.2, c));
             }
+        }
+        Icon::Copy => {
+            // Deux feuilles superposées : la feuille de devant masque celle de derrière.
+            let back = Rect::from_center_size(cen + vec2(2.0, -2.0), vec2(9.0, 11.0));
+            let front = Rect::from_center_size(cen + vec2(-1.5, 1.5), vec2(9.0, 11.0));
+            p.rect_stroke(back, 1.5, st, egui::StrokeKind::Inside);
+            p.rect_filled(front, 1.5, ui.visuals().panel_fill);
+            p.rect_stroke(front, 1.5, st, egui::StrokeKind::Inside);
         }
         Icon::CopyJson => {
             p.text(cen, egui::Align2::CENTER_CENTER, "{ }", egui::FontId::monospace(14.0), c);

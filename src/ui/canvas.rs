@@ -1,6 +1,6 @@
 //! Zone d'affichage de l'image : textures, zoom, déplacement et barre d'animation.
 
-use crate::app::{App, Smoothing, TexEntry};
+use crate::app::{App, OriginStyle, Smoothing, TexEntry};
 use crate::i18n::tr;
 use crate::icons::{Icon, icon_button};
 use crate::model::*;
@@ -128,7 +128,12 @@ impl App {
             _ => ui.visuals().extreme_bg_color,
         };
         painter.rect_filled(rect, 0.0, backdrop);
+        // Textes posés sur le fond : clairs sur un fond sombre, sombres sur un fond clair (quel que soit le thème de l'interface).
+        let dark_backdrop = (backdrop.r() as u32 * 299 + backdrop.g() as u32 * 587 + backdrop.b() as u32 * 114) / 1000 < 128;
+        let (text_strong, text_weak) = if dark_backdrop { (Color32::from_gray(235), Color32::from_gray(165)) } else { (Color32::from_gray(20), Color32::from_gray(90)) };
         let mut nav_step = 0i32;
+        // Alt enfoncé : l'image est bloquée (pas de déplacement, zoom, défilement ni double-clic) ; Alt + clic prélève les couleurs.
+        let locked = ctx.input(|i| i.modifiers.alt);
 
         if let Some(s) = &self.shown {
             // Toutes les directions côte à côte (FRM, ART...) ou la direction choisie seule.
@@ -148,17 +153,17 @@ impl App {
                 self.pan = Vec2::ZERO;
             }
             // Interactions.
-            if resp.dragged() {
+            if !locked && resp.dragged() {
                 if self.fit {
                     self.fit = false;
                 }
                 self.pan += resp.drag_delta();
             }
             // Clic de molette (molette en mode zoom) : retour à 100 %.
-            if !self.settings.wheel_nav && resp.hovered() && ctx.input(|i| i.pointer.button_clicked(egui::PointerButton::Middle)) {
+            if !locked && !self.settings.wheel_nav && resp.hovered() && ctx.input(|i| i.pointer.button_clicked(egui::PointerButton::Middle)) {
                 self.zoom_actual();
             }
-            if resp.double_clicked() {
+            if !locked && resp.double_clicked() {
                 if self.fit && (self.zoom - 1.0).abs() > 1e-3 {
                     self.zoom_actual();
                 } else if self.fit {
@@ -168,7 +173,7 @@ impl App {
                     self.fit_up = true;
                 }
             }
-            if resp.hovered() {
+            if !locked && resp.hovered() {
                 let nav = self.settings.wheel_nav;
                 let ctrl = ctx.input(|i| i.modifiers.command);
                 if nav && !ctrl {
@@ -224,7 +229,7 @@ impl App {
             let onion_tex = if self.settings.onion && grid.is_none() { prev_frame.and_then(|f| self.ensure_tex(&ctx, level, f)) } else { None };
             // Point d'ancrage (centre de l'hexagone pour un FRM), dans les coordonnées de la vue transformée.
             let has_anchor = self.shown.as_ref().is_some_and(|s| matches!(s.loaded.pic.format, Format::Frm | Format::Art | Format::Spr));
-            let anchors: Vec<(f32, f32)> = if self.settings.show_origin && has_anchor {
+            let anchors: Vec<(f32, f32)> = if self.settings.origin != OriginStyle::Off && has_anchor {
                 let to_view = |(ax, ay): (i32, i32)| self.transform.map_point(ax as f32, ay as f32, cw0 as usize, ch0 as usize);
                 match (&grid, &self.shown) {
                     (Some(g), _) => (0..g.n).map(|d| to_view(g.anchor(d))).collect(),
@@ -235,6 +240,7 @@ impl App {
                 Vec::new()
             };
             let mut select_dir: Option<usize> = None;
+            let mut pick_color: Option<(bool, [u8; 4])> = None;
             if let Some((tid, w, h)) = tex {
                 let sc = self.zoom / ppp; // points par pixel de l'image
                 let size_pts = vec2(w as f32, h as f32) * sc;
@@ -302,13 +308,36 @@ impl App {
                     for &(ax, ay) in &anchors {
                         let c = img_rect.min + vec2(ax, ay) * sc;
                         let (dark, light) = (Stroke::new(3.0, Color32::from_black_alpha(200)), Stroke::new(1.5, Color32::from_rgb(255, 80, 60)));
+                        let style = self.settings.origin;
+                        if style == OriginStyle::Dot {
+                            painter.circle_filled(c, 4.5, Color32::from_black_alpha(200));
+                            painter.circle_filled(c, 3.0, light.color);
+                        }
                         for st in [dark, light] {
-                            painter.circle_stroke(c, 6.0, st);
-                            painter.line_segment([c - vec2(14.0, 0.0), c + vec2(14.0, 0.0)], st);
-                            painter.line_segment([c - vec2(0.0, 14.0), c + vec2(0.0, 14.0)], st);
+                            if style == OriginStyle::Target {
+                                painter.circle_stroke(c, 6.0, st);
+                            }
+                            if matches!(style, OriginStyle::Cross | OriginStyle::Target) {
+                                painter.line_segment([c - vec2(14.0, 0.0), c + vec2(14.0, 0.0)], st);
+                                painter.line_segment([c - vec2(0.0, 14.0), c + vec2(0.0, 14.0)], st);
+                            }
                         }
                     }
                 }
+                // Pixel sous une position de l'écran : coordonnées, couleur, indice de palette.
+                let pixel_at = |hp: egui::Pos2| -> Option<crate::view::PixelInfo> {
+                    let tx = (((hp.x - img_rect.min.x) / sc).floor().max(0.0) as usize).min((w as usize).saturating_sub(1));
+                    let ty = (((hp.y - img_rect.min.y) / sc).floor().max(0.0) as usize).min((h as usize).saturating_sub(1));
+                    let (sx, sy) = self.transform.source_of(tx, ty, cw0 as usize, ch0 as usize);
+                    self.shown.as_ref().and_then(|s| match &grid {
+                        Some(g) => g.cell_at(sx as i32, sy as i32).and_then(|(d, lx, ly)| {
+                            let pic = &s.loaded.pic;
+                            let b = pic.dir_bounds(d);
+                            pixel_info(pic, d, s.frame.min(pic.dir_len(d).saturating_sub(1)), lx - (b.0 - g.x0), ly - (b.1 - g.y0))
+                        }),
+                        None => pixel_info(&s.loaded.pic, s.dir, s.frame, sx as i32, sy as i32),
+                    })
+                };
                 // Un clic sur une direction (toutes les directions affichées) la choisit.
                 if resp.clicked()
                     && let (Some(g), Some(hp)) = (&grid, resp.interact_pointer_pos())
@@ -319,35 +348,39 @@ impl App {
                     let (sx, sy) = self.transform.source_of(tx, ty, cw0 as usize, ch0 as usize);
                     select_dir = g.cell_at(sx as i32, sy as i32).map(|(d, _, _)| d);
                 }
+                // Alt + clic gauche : couleur 1 ; Alt + clic droit : couleur 2.
+                if ctx.input(|i| i.modifiers.alt)
+                    && (resp.clicked() || resp.secondary_clicked())
+                    && let Some(hp) = resp.interact_pointer_pos()
+                    && img_rect.contains(hp)
+                    && let Some(info) = pixel_at(hp)
+                {
+                    pick_color = Some((resp.secondary_clicked(), info.rgba));
+                }
                 // Pixel sous le curseur : position, couleur, indice de palette.
                 if self.settings.show_pixel_info
                     && let Some(hp) = resp.hover_pos()
                     && img_rect.contains(hp)
+                    && let Some(info) = pixel_at(hp)
                 {
-                    let tx = (((hp.x - img_rect.min.x) / sc).floor().max(0.0) as usize).min((w as usize).saturating_sub(1));
-                    let ty = (((hp.y - img_rect.min.y) / sc).floor().max(0.0) as usize).min((h as usize).saturating_sub(1));
-                    let (sx, sy) = self.transform.source_of(tx, ty, cw0 as usize, ch0 as usize);
-                    let info = self.shown.as_ref().and_then(|s| match &grid {
-                        Some(g) => g.cell_at(sx as i32, sy as i32).and_then(|(d, lx, ly)| {
-                            let pic = &s.loaded.pic;
-                            let b = pic.dir_bounds(d);
-                            pixel_info(pic, d, s.frame.min(pic.dir_len(d).saturating_sub(1)), lx - (b.0 - g.x0), ly - (b.1 - g.y0))
-                        }),
-                        None => pixel_info(&s.loaded.pic, s.dir, s.frame, sx as i32, sy as i32),
-                    });
-                    if let Some(info) = info {
-                        let mut text = format!("{}, {}   {}", info.x, info.y, hex_color(info.rgba));
-                        if let Some(i) = info.index {
-                            text += &format!("   idx {i}");
-                        }
-                        let galley = painter.layout_no_wrap(text, FontId::monospace(13.0), Color32::WHITE);
-                        let sz = galley.size();
-                        let bubble = Rect::from_min_size(rect.left_bottom() + vec2(10.0, -18.0 - sz.y), sz + vec2(sz.y + 16.0, 8.0));
-                        painter.rect_filled(bubble, 4.0, Color32::from_black_alpha(190));
-                        let swatch = Rect::from_min_size(bubble.min + vec2(5.0, 4.0), vec2(sz.y, sz.y));
-                        painter.rect_filled(swatch, 2.0, Color32::from_rgb(info.rgba[0], info.rgba[1], info.rgba[2]));
-                        painter.galley(bubble.min + vec2(sz.y + 12.0, 4.0), galley, Color32::WHITE);
+                    let mut text = format!("{}, {}   {}", info.x, info.y, hex_color(info.rgba));
+                    if let Some(i) = info.index {
+                        text += &format!("   idx {i}");
                     }
+                    let galley = painter.layout_no_wrap(text, FontId::monospace(13.0), Color32::WHITE);
+                    let sz = galley.size();
+                    let bubble = Rect::from_min_size(rect.left_bottom() + vec2(10.0, -18.0 - sz.y), sz + vec2(sz.y + 16.0, 8.0));
+                    painter.rect_filled(bubble, 4.0, Color32::from_black_alpha(190));
+                    let swatch = Rect::from_min_size(bubble.min + vec2(5.0, 4.0), vec2(sz.y, sz.y));
+                    painter.rect_filled(swatch, 2.0, Color32::from_rgb(info.rgba[0], info.rgba[1], info.rgba[2]));
+                    painter.galley(bubble.min + vec2(sz.y + 12.0, 4.0), galley, Color32::WHITE);
+                }
+            }
+            if let Some((second, c)) = pick_color {
+                if second {
+                    self.settings.color2 = c;
+                } else {
+                    self.settings.color1 = c;
                 }
             }
             if let Some(d) = select_dir
@@ -360,16 +393,18 @@ impl App {
             self.anim_overlay(&ctx, rect);
         } else if let Some((p, e)) = &self.error {
             let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            painter.text(rect.center() - vec2(0.0, 12.0), Align2::CENTER_CENTER, name, FontId::proportional(16.0), ui.visuals().strong_text_color());
+            painter.text(rect.center() - vec2(0.0, 12.0), Align2::CENTER_CENTER, name, FontId::proportional(16.0), text_strong);
             painter.text(rect.center() + vec2(0.0, 12.0), Align2::CENTER_CENTER, e, FontId::proportional(13.0), Color32::from_rgb(230, 110, 100));
         } else if self.wanted.is_none() {
-            painter.text(rect.center(), Align2::CENTER_CENTER, tr("s.hint"), FontId::proportional(16.0), ui.visuals().weak_text_color());
+            painter.text(rect.center(), Align2::CENTER_CENTER, tr("s.hint"), FontId::proportional(16.0), text_weak);
         }
         if nav_step != 0 {
             self.step(&ctx, nav_step);
         }
         let mut open_req = false;
-        if self.shown.is_some() {
+        let mut quick: Option<(Format, bool, bool)> = None;
+        // Alt enfoncé : pas de menu contextuel (Alt + clic sert à prélever les couleurs).
+        if self.shown.is_some() && !ctx.input(|i| i.modifiers.alt) {
             resp.context_menu(|ui| {
                 if ui.add(egui::Button::new(tr("m.copy_image")).shortcut_text("Ctrl+C")).clicked() {
                     self.copy_image(&ctx);
@@ -382,6 +417,15 @@ impl App {
                 if ui.add(egui::Button::new(tr("m.extract_pal")).shortcut_text("Ctrl+P")).clicked() {
                     self.open_palette_dialog();
                     ui.close();
+                }
+                // Conversions en un clic, à côté du fichier : inutiles vers le format déjà en place.
+                ui.separator();
+                let fmt = self.shown.as_ref().map(|s| s.loaded.pic.format);
+                for (label, target, with_pal, white) in [("m.quick_frm", Format::Frm, false, false), ("m.quick_frm_pal", Format::Frm, true, false), ("m.quick_frm_pal_death", Format::Frm, true, true), ("m.quick_rix", Format::Rix, false, false)] {
+                    if ui.add_enabled(fmt != Some(target), egui::Button::new(tr(label))).clicked() {
+                        quick = Some((target, with_pal, white));
+                        ui.close();
+                    }
                 }
                 ui.separator();
                 if ui.add(egui::Button::new(tr("m.open_default")).shortcut_text("Ctrl+Enter")).clicked() {
@@ -397,6 +441,9 @@ impl App {
         }
         if open_req {
             self.open_in_default_program();
+        }
+        if let Some((fmt, with_pal, white)) = quick {
+            self.quick_convert(fmt, with_pal, white);
         }
         // Erreur de chargement par-dessus une image affichée.
         if self.shown.is_some()

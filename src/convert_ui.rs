@@ -54,6 +54,8 @@ pub struct ConvSettings {
     pub bg: [u8; 3],
     pub jpeg_quality: u8,
     pub png_level: PngLevel,
+    /// KTX2 : BC7 (avec perte) au lieu de RGBA8 sans perte.
+    pub ktx2_bc7: bool,
     pub sequence: bool,
     /// Dernier dossier de sortie utilisé.
     pub out_dir: Option<PathBuf>,
@@ -79,6 +81,7 @@ impl Default for ConvSettings {
             bg: [0, 0, 0],
             jpeg_quality: 92,
             png_level: PngLevel::Normal,
+            ktx2_bc7: false,
             sequence: false,
             out_dir: None,
             pal_path: None,
@@ -179,7 +182,7 @@ impl ConvertUi {
             depth: self.depth_choice()?,
             dither: self.s.dither,
             bg: self.s.bg,
-            enc: EncodeOpts { jpeg_quality: self.s.jpeg_quality, png_level: self.s.png_level },
+            enc: EncodeOpts { jpeg_quality: self.s.jpeg_quality, png_level: self.s.png_level, ktx2_bc7: self.s.ktx2_bc7 },
             ops: ImageOps { resize: self.s.resize, resample: self.s.resample, trim: self.s.trim, dither_method: self.s.dither_method },
             text_white: self.s.text_white,
         })
@@ -300,6 +303,14 @@ impl ConvertUi {
             });
             ui.end_row();
         }
+        if self.format() == Format::Ktx2 {
+            ui.label(tr("c.ktx2_mode"));
+            egui::ComboBox::from_id_salt("ktx2_mode").selected_text(tr(if self.s.ktx2_bc7 { "c.ktx2_bc7" } else { "c.ktx2_lossless" })).show_ui(ui, |ui| {
+                ui.selectable_value(&mut self.s.ktx2_bc7, false, tr("c.ktx2_lossless"));
+                ui.selectable_value(&mut self.s.ktx2_bc7, true, tr("c.ktx2_bc7"));
+            });
+            ui.end_row();
+        }
         // Taille : originale, pourcentage ou plus grand côté.
         ui.label(tr("c.resize"));
         ui.horizontal(|ui| {
@@ -360,7 +371,7 @@ impl ConvertUi {
     fn signature(&self) -> String {
         let s = &self.s;
         format!(
-            "{}|{:?}|{}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{:?}|{}|{}|{:?}",
+            "{}|{:?}|{}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}|{}|{:?}|{}|{}|{:?}",
             s.fmt,
             s.depth,
             s.dither,
@@ -370,6 +381,7 @@ impl ConvertUi {
             s.trim,
             s.bg,
             s.png_level,
+            s.ktx2_bc7,
             s.jpeg_quality,
             s.pal_path,
             s.create_pal,

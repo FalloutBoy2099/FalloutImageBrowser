@@ -14,9 +14,17 @@ impl App {
     fn favorites_bar(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         let mut open: Option<std::path::PathBuf> = None;
         let mut remove: Option<usize> = None;
+        let mut toggle = false;
+        let folder_view = self.settings.folder_view;
         let cur = self.tree.selected_dir.clone();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+            // Bascule arborescence / mode dossier (miniatures), puis les accès rapides.
+            let tip = tr(if folder_view { "t.tree_view" } else { "t.folder_view" });
+            if icon_button(ui, Icon::Thumbs, &tip, folder_view, true).clicked() {
+                toggle = true;
+            }
+            ui.separator();
             for (key, path) in &self.special {
                 let tip = format!("{}\n{}", tr(key), path.display());
                 let icon = match *key {
@@ -43,6 +51,15 @@ impl App {
                 });
             }
         });
+        if toggle {
+            self.settings.folder_view = !self.settings.folder_view;
+            if self.settings.folder_view {
+                self.folder_follow = true;
+            } else {
+                // Retour à l'arborescence : elle se place sur le dossier courant.
+                self.tree_scroll_to = self.tree.selected_dir.as_ref().and_then(|d| self.tree.rows.iter().position(|r| &r.path == d));
+            }
+        }
         if let Some(i) = remove {
             self.settings.favorites.remove(i);
         }
@@ -77,6 +94,10 @@ impl App {
             }
         });
         ui.add_space(5.0);
+        if self.settings.folder_view {
+            self.folder_panel(ui);
+            return;
+        }
         // Largeur du contenu : la ligne la plus longue (indentation, icône et nom) ; recalculée quand les lignes changent.
         if self.tree_w.0 != self.tree.rev {
             let font = FontId::proportional(13.5);

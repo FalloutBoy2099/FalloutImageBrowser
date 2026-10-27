@@ -20,6 +20,7 @@ Inspired by *Titanium FRM Browser*.
 | PNG | 8 (palette, tRNS transparency), 16, 24, 32-bit; every PNG type can be read |
 | PNM (PBM, PGM, PPM, PAM) | 24-bit (P6), 32-bit (P7 with alpha); reads P1 to P7, 8 and 16-bit |
 | QOI | 24, 32-bit |
+| KTX2 | RGBA8 lossless or BC7, Zstandard |
 | RIX | 8-bit |
 | TIFF | 8, 8 Fallout, 16, 24, 32-bit |
 | TGA | 8, 8 Fallout, 16, 24, 32-bit |
@@ -115,7 +116,7 @@ fallout_image_browser palette <input> -f pal|riff|act|gpl|kpl|hex [-o file|folde
 fallout_image_browser extract <input> [-o folder] [--overwrite] [-q]       # input: a .DAT archive, or a folder or file inside one
 ```
 
-* **File mode**: `<input>` is an image. Every readable format is accepted as input, including the read-only ones (PSD, PDN, XCF, KRA, ORA, ASE, ZAR, TIL, SPR, palette files); only the 14 writable formats (ART, BMP, DDS, FRM, GIF, JPEG, PCX, PNG, PNM, QOI, RIX, TIFF, TGA, WEBP) are valid for `-f`. For animations (SPR, GIF, WebP, APNG): `--frame`, `--direction`, `--sequence`.
+* **File mode**: `<input>` is an image. Every readable format is accepted as input, including the read-only ones (PSD, PDN, XCF, KRA, ORA, ASE, ZAR, TIL, SPR, palette files); only the 15 writable formats (ART, BMP, DDS, FRM, GIF, JPEG, KTX2, PCX, PNG, PNM, QOI, RIX, TIFF, TGA, WEBP) are valid for `-f`. For animations (SPR, GIF, WebP, APNG): `--frame`, `--direction`, `--sequence`.
   **Folder mode**: `<input>` is a folder (or a `.dat` archive, or a folder inside an archive); every image it contains is converted
   (`-r` for sub-folders; always the case for a whole archive, whose tree is kept under `--out`).
 * Options: `-d 8|8f|8p|16|24|32` (`8p` without `--pal` creates the .PAL file), `-p file.pal`,

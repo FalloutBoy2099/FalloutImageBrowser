@@ -28,6 +28,7 @@ pub mod palette;
 pub mod palette_export;
 pub mod palette_ui;
 pub mod props;
+pub mod thumbs;
 pub mod tree;
 pub mod ui;
 pub mod view;

@@ -128,7 +128,7 @@ impl App {
     pub fn pick_file(&mut self, ctx: &egui::Context) {
         let exts: Vec<&str> = vec![
             "art", "bmp", "frm", "fr0", "fr1", "fr2", "fr3", "fr4", "fr5", "gif", "jpg", "jpeg", "pcx", "rix", "tif", "tiff", "tga", "webp", "png", "psd", "psb", "pdn", "xcf",
-            "kra", "ora", "dds", "qoi", "pbm", "pgm", "ppm", "pnm", "pam", "ase", "aseprite", "pal", "act", "gpl", "hex", "kpl", "zar", "til", "spr",
+            "kra", "ora", "dds", "qoi", "ktx2", "pbm", "pgm", "ppm", "pnm", "pam", "ase", "aseprite", "pal", "act", "gpl", "hex", "kpl", "zar", "til", "spr",
         ];
         let mut d = rfd::FileDialog::new().set_title(tr("m.open_file")).add_filter(tr("m.images"), &exts);
         if let Some(dir) = &self.settings.last_dir {

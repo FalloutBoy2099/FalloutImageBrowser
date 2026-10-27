@@ -347,6 +347,20 @@ impl Tree {
         self.rebuild();
     }
 
+    /// Sous-dossiers de `dir` (nom, chemin, archive) ; `None` : les racines (lecteurs).
+    pub fn subdirs_of(&mut self, dir: Option<&Path>) -> Vec<(PathBuf, String, bool)> {
+        match dir {
+            None => self.roots.iter().map(|n| (n.path.clone(), n.name.clone(), n.archive)).collect(),
+            Some(d) => match Self::find_mut(&mut self.roots, d) {
+                Some(n) => {
+                    n.load();
+                    n.children.iter().map(|c| (c.path.clone(), c.name.clone(), c.archive)).collect()
+                }
+                None => Vec::new(),
+            },
+        }
+    }
+
     pub fn files_of(&self, dir: &Path) -> Vec<PathBuf> {
         Self::find(&self.roots, dir).map(|n| ordered_files(&n.files, self.sort, self.descending, &self.filter).iter().map(|f| f.path.clone()).collect()).unwrap_or_default()
     }

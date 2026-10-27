@@ -100,6 +100,11 @@ fn decode_bc(b: Bc, data: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Décode des blocs BC7 en RGBA 8 bits (utilisé aussi par KTX2).
+pub(super) fn decode_bc7(data: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
+    decode_bc(Bc::Bc7, data, w, h)
+}
+
 pub fn decode(data: &[u8]) -> Result<Picture> {
     if data.len() < 128 || &data[..4] != b"DDS " || le32(data, 4) != 124 {
         bail!("signature ou en-tête DDS invalide");

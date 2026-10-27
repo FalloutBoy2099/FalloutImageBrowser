@@ -31,6 +31,7 @@ pub enum Icon {
     Rename,
     Convert,
     Palette,
+    Thumbs,
 }
 
 pub fn icon_button(ui: &mut Ui, icon: Icon, tip: &str, selected: bool, enabled: bool) -> Response {
@@ -171,6 +172,13 @@ fn paint_icon(ui: &Ui, r: Rect, icon: Icon, c: Color32) {
             for (i, col) in colors.iter().enumerate() {
                 let (x, y) = ((i % 2) as f32, (i / 2) as f32);
                 p.rect_filled(Rect::from_min_size(cen + vec2(-8.0 + x * 8.5, -8.0 + y * 8.5), vec2(7.5, 7.5)), 1.5, *col);
+            }
+        }
+        Icon::Thumbs => {
+            // Grille de quatre vignettes : mode dossier.
+            for (x, y) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+                let q = Rect::from_min_size(cen + vec2(-8.0 + x * 9.0, -8.0 + y * 9.0), vec2(7.0, 7.0));
+                p.rect_stroke(q, 1.2, st, egui::StrokeKind::Inside);
             }
         }
         Icon::Folder => {

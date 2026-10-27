@@ -199,7 +199,7 @@ fn png_levels_all_decode_to_the_same_pixels() {
             depth: DepthChoice::Rgba32,
             dither: false,
             bg: [0, 0, 0],
-            enc: EncodeOpts { jpeg_quality: 92, png_level: level },
+            enc: EncodeOpts { jpeg_quality: 92, png_level: level, ktx2_bc7: false },
             ops: Default::default(),
             text_white: false,
         };

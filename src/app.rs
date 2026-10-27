@@ -22,6 +22,63 @@ pub enum Smoothing {
     Off,
 }
 
+/// Curseur des barres de défilement : taille d'egui, ou longueur minimale confortable.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Debug)]
+pub enum ScrollbarStyle {
+    #[default]
+    Normal,
+    Improved,
+}
+
+impl ScrollbarStyle {
+    pub const ALL: [ScrollbarStyle; 2] = [ScrollbarStyle::Normal, ScrollbarStyle::Improved];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            ScrollbarStyle::Normal => "m.scroll_normal",
+            ScrollbarStyle::Improved => "m.scroll_improved",
+        }
+    }
+
+    /// Applique le réglage aux deux thèmes (clair et sombre).
+    pub fn apply(self, ctx: &egui::Context) {
+        let min_len = match self {
+            ScrollbarStyle::Normal => 12.0,
+            ScrollbarStyle::Improved => 56.0,
+        };
+        ctx.all_styles_mut(|s| s.spacing.scroll.handle_min_length = min_len);
+    }
+}
+
+/// Taille des miniatures du mode dossier (plus grand côté, en points).
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Debug)]
+pub enum ThumbSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl ThumbSize {
+    pub const ALL: [ThumbSize; 3] = [ThumbSize::Small, ThumbSize::Medium, ThumbSize::Large];
+
+    pub fn px(self) -> u32 {
+        match self {
+            ThumbSize::Small => 64,
+            ThumbSize::Medium => 96,
+            ThumbSize::Large => 128,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            ThumbSize::Small => "m.thumb_small",
+            ThumbSize::Medium => "m.thumb_medium",
+            ThumbSize::Large => "m.thumb_large",
+        }
+    }
+}
+
 /// Repère d'ancrage (origine) : désactivé, point, croix ou cible (cercle et croix).
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Debug)]
 pub enum OriginStyle {
@@ -134,6 +191,10 @@ impl Default for HistoSettings {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Settings {
+    pub scrollbars: ScrollbarStyle,
+    /// Panneau de gauche : `false` = arborescence, `true` = mode dossier (miniatures).
+    pub folder_view: bool,
+    pub thumb_size: ThumbSize,
     pub theme: ThemeChoice,
     pub histo: HistoSettings,
     pub lang: Option<Lang>,
@@ -194,6 +255,9 @@ impl Default for Settings {
             show_props: false,
             show_colors: false,
             theme: Default::default(),
+            folder_view: false,
+            scrollbars: ScrollbarStyle::Normal,
+            thumb_size: ThumbSize::Medium,
             histo: Default::default(),
             color1: [0, 0, 0, 255],
             color2: [255, 255, 255, 255],
@@ -366,6 +430,10 @@ pub struct App {
     /// Extraction d'archive en cours (thread) : résultat et dossier de sortie.
     pub extract_job: Option<(std::sync::mpsc::Receiver<Result<crate::dat::Extracted, String>>, std::path::PathBuf)>,
     pub tree_scroll_to: Option<usize>,
+    /// Miniatures du mode dossier, dernier fichier vu par ce mode et demande de défilement jusqu'à lui.
+    pub thumbs: crate::thumbs::Thumbs,
+    pub folder_seen: Option<PathBuf>,
+    pub folder_follow: bool,
     /// Bureau, Documents, Téléchargements (boutons réservés de la barre de favoris).
     pub special: Vec<(&'static str, PathBuf)>,
     /// Zone de l'arborescence (la saisie au clavier n'y agit que si la souris la survole) et recherche en cours.
@@ -386,6 +454,7 @@ impl App {
         let lang = forced.or(settings.lang).unwrap_or_else(Lang::detect);
         i18n::set_lang(lang);
         cc.egui_ctx.set_theme(settings.theme.preference());
+        settings.scrollbars.apply(&cc.egui_ctx);
         let mut app = App {
             tree: Tree::new(),
             files: Vec::new(),
@@ -424,6 +493,9 @@ impl App {
             slideshow_t: 0.0,
             extract_job: None,
             tree_scroll_to: None,
+            thumbs: crate::thumbs::Thumbs::new(cc.egui_ctx.clone()),
+            folder_seen: None,
+            folder_follow: true,
             special: crate::tree::special_folders().into_iter().filter(|(_, p)| p.is_dir()).collect(),
             tree_rect: None,
             ta_buf: String::new(),
@@ -557,6 +629,7 @@ impl App {
                 self.index = self.files.iter().position(|f| *f == w);
             }
             self.cache.clear();
+            self.thumbs.clear();
             if let Some(w) = self.wanted.clone() {
                 self.show_file(ctx, &w);
             }
@@ -694,6 +767,7 @@ impl App {
         };
         self.policy = policy;
         self.cache.clear();
+        self.thumbs.clear();
         if let Some(w) = self.wanted.clone() {
             self.show_file(ctx, &w);
         }

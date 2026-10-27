@@ -48,6 +48,7 @@ pub enum Format {
     Ora,
     Dds,
     Qoi,
+    Ktx2,
     Pnm,
     // Lecture seule (suite) : Aseprite et fichiers de palette (nuancier).
     Ase,
@@ -60,13 +61,14 @@ pub enum Format {
 
 impl Format {
     /// Formats lisibles ET inscriptibles (cibles de conversion).
-    pub const ALL: [Format; 14] = [
+    pub const ALL: [Format; 15] = [
         Format::Art,
         Format::Bmp,
         Format::Dds,
         Format::Frm,
         Format::Gif,
         Format::Jpeg,
+        Format::Ktx2,
         Format::Pcx,
         Format::Png,
         Format::Pnm,
@@ -104,6 +106,7 @@ impl Format {
             Format::Ora => "ORA",
             Format::Dds => "DDS",
             Format::Qoi => "QOI",
+            Format::Ktx2 => "KTX2",
             Format::Pnm => "PNM",
             Format::Ase => "ASE",
             Format::Palette => "PALETTE",
@@ -134,6 +137,7 @@ impl Format {
             Format::Ora => "ora",
             Format::Dds => "dds",
             Format::Qoi => "qoi",
+            Format::Ktx2 => "ktx2",
             Format::Pnm => "ppm",
             Format::Ase => "ase",
             Format::Palette => "pal",
@@ -164,6 +168,7 @@ impl Format {
             "ora" => Format::Ora,
             "dds" => Format::Dds,
             "qoi" => Format::Qoi,
+            "ktx2" => Format::Ktx2,
             "pbm" | "pgm" | "ppm" | "pnm" | "pam" => Format::Pnm,
             "ase" | "aseprite" => Format::Ase,
             "pal" | "act" | "gpl" | "hex" | "kpl" => Format::Palette,

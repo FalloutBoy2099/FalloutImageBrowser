@@ -28,6 +28,7 @@ png = "0.18"
 image = { version = "0.25", default-features = false, features = ["jpeg", "webp", "png"] }
 sevenz-rust2 = { version = "0.24", default-features = false }
 zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
+ruzstd = "0.9.1"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Registry", "Win32_Security", "Win32_Foundation", "Win32_UI_Shell", "Win32_System_Com"] }

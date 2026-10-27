@@ -1,6 +1,6 @@
 //! Barre de menus.
 
-use crate::app::{App, OriginStyle, Smoothing, ThemeChoice};
+use crate::app::{App, OriginStyle, ScrollbarStyle, Smoothing, ThemeChoice, ThumbSize};
 use crate::i18n::{self, Lang, tr};
 use crate::loader::PalPolicy;
 use crate::model::*;
@@ -68,6 +68,20 @@ impl App {
                 ui.checkbox(&mut self.settings.show_tree, tr("t.tree"));
                 ui.checkbox(&mut self.settings.show_colors, tr("colors"));
                 ui.checkbox(&mut self.settings.show_props, tr("properties"));
+                // Taille des miniatures du mode dossier.
+                ui.separator();
+                ui.label(tr("m.thumb_size"));
+                for s in ThumbSize::ALL {
+                    ui.radio_value(&mut self.settings.thumb_size, s, tr(s.key()));
+                }
+                // Curseur des barres de défilement : toujours assez long pour être saisi.
+                ui.separator();
+                ui.label(tr("m.scrollbars"));
+                for s in ScrollbarStyle::ALL {
+                    if ui.radio_value(&mut self.settings.scrollbars, s, tr(s.key())).clicked() {
+                        s.apply(&ctx);
+                    }
+                }
                 ui.separator();
                 if item(ui, tr("m.fit"), "F", has_img) {
                     self.fit = true;

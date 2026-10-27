@@ -7,6 +7,7 @@ pub mod dds;
 pub mod frm;
 pub mod gif;
 pub mod jpeg;
+pub mod ktx2;
 pub mod layered;
 pub mod palfile;
 pub mod pcx;
@@ -128,11 +129,13 @@ impl PngLevel {
 pub struct EncodeOpts {
     pub jpeg_quality: u8,
     pub png_level: PngLevel,
+    /// KTX2 : compresser en BC7 (avec perte) au lieu d'écrire du RGBA8 sans perte.
+    pub ktx2_bc7: bool,
 }
 
 impl Default for EncodeOpts {
     fn default() -> Self {
-        EncodeOpts { jpeg_quality: 92, png_level: PngLevel::Normal }
+        EncodeOpts { jpeg_quality: 92, png_level: PngLevel::Normal, ktx2_bc7: false }
     }
 }
 
@@ -173,7 +176,7 @@ pub fn caps(f: Format) -> Caps {
         // Formats en lecture seule.
         Format::Psd | Format::Pdn | Format::Xcf | Format::Kra | Format::Ora => base,
         Format::Dds => Caps { d16: true, d24: true, d32: true, ..base },
-        Format::Qoi | Format::Pnm => Caps { d24: true, d32: true, ..base },
+        Format::Qoi | Format::Pnm | Format::Ktx2 => Caps { d24: true, d32: true, ..base },
         Format::Ase | Format::Palette | Format::Zar | Format::Til | Format::Spr => base,
     }
 }
@@ -199,6 +202,7 @@ pub fn decode(format: Format, data: &[u8], ctx: &DecodeCtx) -> Result<Picture> {
         Format::Ora => layered::decode_ora(data),
         Format::Dds => dds::decode(data),
         Format::Qoi => qoi::decode(data),
+        Format::Ktx2 => ktx2::decode(data),
         Format::Pnm => pnm::decode(data),
         Format::Ase => ase::decode(data),
         Format::Palette => palfile::decode(data, &ctx.ext),
@@ -244,6 +248,9 @@ pub fn sniff(data: &[u8]) -> Option<Format> {
     }
     if data.starts_with(b"<sprite>") {
         return Some(Format::Spr);
+    }
+    if data.len() >= 12 && data[..12] == [0xAB, b'K', b'T', b'X', b' ', b'2', b'0', 0xBB, 0x0D, 0x0A, 0x1A, 0x0A] {
+        return Some(Format::Ktx2);
     }
     if &data[..4] == b"qoif" {
         return Some(Format::Qoi);
@@ -295,6 +302,7 @@ pub fn encode(prep: &Prepared, opts: &EncodeOpts) -> Result<Vec<u8>> {
         Format::Bmp => bmp::encode(prep),
         Format::Dds => dds::encode(prep),
         Format::Qoi => qoi::encode(prep),
+        Format::Ktx2 => ktx2::encode(prep, opts),
         Format::Pnm => pnm::encode(prep),
         Format::Frm => frm::encode(prep),
         Format::Gif => gif::encode(prep),

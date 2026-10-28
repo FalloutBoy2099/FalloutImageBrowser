@@ -1095,3 +1095,114 @@ fn real_til_and_recolor_dump() {
         std::fs::write(std::path::Path::new(&dump).join(format!("chk_{name}.jpg")), j).unwrap();
     }
 }
+
+// ----------------------------------------------------------------------------- écriture ZAR
+
+#[test]
+fn zar_written_by_the_converter_reads_back_identically() {
+    use fallout_image_browser::convert::*;
+    use fallout_image_browser::formats::EncodeOpts;
+    // Dégradé de couleurs, un trou transparent et des pixels à moitié transparents.
+    let (w, h) = (23usize, 9usize);
+    let mut v = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        for x in 0..w {
+            let a = if (3..9).contains(&x) && y < 4 {
+                0
+            } else if x > 18 {
+                128
+            } else {
+                255
+            };
+            v.extend_from_slice(&[(x * 10) as u8, (y * 25) as u8, 90, a]);
+        }
+    }
+    let pic = Picture::single(Format::Png, w as u32, h as u32, Pixels::Rgba(v.clone()), None);
+    let o = ConvertOptions {
+        format: Format::Zar,
+        depth: DepthChoice::Indexed(PalChoice::Adaptive),
+        dither: false,
+        bg: [0, 0, 0],
+        enc: EncodeOpts::default(),
+        ops: Default::default(),
+        text_white: false,
+    };
+    let bytes = convert_to_bytes(&pic, &o, &Selection::default()).unwrap();
+    assert_eq!(formats::sniff(&bytes), Some(Format::Zar));
+    let back = formats::decode(Format::Zar, &bytes, &ctx()).unwrap();
+    assert_eq!((back.frames[0].width, back.frames[0].height), (w as u32, h as u32));
+    let got = frame_to_rgba(&back.frames[0], back.palette.as_ref());
+    for (a, b) in v.chunks_exact(4).zip(got.chunks_exact(4)) {
+        // Le ZAR garde l'opacité de chaque pixel, y compris les demi-transparences (ombres, lueurs des sprites).
+        assert_eq!(a[3], b[3], "alpha");
+        if a[3] > 0 {
+            assert_eq!(&a[..3], &b[..3], "couleur");
+        }
+    }
+}
+
+/// SPR « en couches » : chaque image a quatre éléments (vide ou calque positionné), superposés dans l'ordre avec leur palette.
+#[test]
+fn fallout_tactics_spr_layers_are_composited() {
+    let short = |w: u32, h: u32, runs: &[u8]| -> Vec<u8> {
+        let mut o = b"<zar>\x00\x34\x00".to_vec();
+        o.extend_from_slice(&w.to_le_bytes());
+        o.extend_from_slice(&h.to_le_bytes());
+        o.push(0);
+        o.extend_from_slice(&(runs.len() as u32).to_le_bytes());
+        o.extend_from_slice(runs);
+        o
+    };
+    let item = |x: i32, y: i32, zar: Vec<u8>| -> Vec<u8> {
+        let mut o = vec![1u8];
+        o.extend_from_slice(&x.to_le_bytes());
+        o.extend_from_slice(&y.to_le_bytes());
+        o.extend_from_slice(&zar);
+        o
+    };
+    let mut payload = Vec::new();
+    for _ in 0..4 {
+        payload.extend_from_slice(&256u32.to_le_bytes());
+        payload.extend_from_slice(&tactics_palette());
+    }
+    // Calque 0 : 4 × 2 ; calques 1 et 2 : vides ; calque 3 : deux pixels verts opaques en (1, 1).
+    payload.extend_from_slice(&item(0, 0, short(4, 2, &tactics_runs())));
+    payload.extend_from_slice(&[0, 0]);
+    payload.extend_from_slice(&item(1, 1, short(2, 1, &[(2 << 2) | 1, 2, 2])));
+    // Collection de type « 2 » (zlib), rangée calque par calque ; une image, une direction.
+    let block = {
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        z.write_all(&payload).unwrap();
+        let mut b = b"<spranim_img>\x00".to_vec();
+        b.push(b'2');
+        b.push(0);
+        b.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        b.extend_from_slice(&z.finish().unwrap());
+        b
+    };
+    let name = b"Stand";
+    let hdr_len = 12 + 4 + 4 + name.len() + 8 + 16;
+    let start = 0x66usize;
+    let mut f = vec![0u8; start];
+    f[..11].copy_from_slice(b"<sprite>\x00\x34\x00");
+    let mut h = b"<spranim>\x00\x31\x00".to_vec();
+    h.extend_from_slice(&((start + hdr_len) as u32).to_le_bytes());
+    h.extend_from_slice(&(name.len() as u32).to_le_bytes());
+    h.extend_from_slice(name);
+    h.extend_from_slice(&1u32.to_le_bytes());
+    h.extend_from_slice(&1u32.to_le_bytes());
+    for v in [0u32, 0, 4, 2] {
+        h.extend_from_slice(&v.to_le_bytes());
+    }
+    assert_eq!(h.len(), hdr_len);
+    f.extend_from_slice(&h);
+    f.extend_from_slice(&block);
+    let p = formats::decode(Format::Spr, &f, &ctx()).unwrap_or_else(|e| panic!("SPR : {e}"));
+    assert_eq!((p.frames[0].width, p.frames[0].height), (4, 2));
+    let v = rgba_of(&p);
+    assert_eq!(&v[0..4], &[255, 0, 0, 255]); // calque 0 inchangé
+    assert_eq!(&v[16..20], &[255, 0, 0, 64]);
+    assert_eq!(&v[20..24], &[0, 255, 0, 255]); // calque 3 par-dessus
+    assert_eq!(&v[24..28], &[0, 255, 0, 255]);
+    assert_eq!(&v[28..32], &[0, 0, 0, 20]); // série « alpha seul » : couleur par défaut 0 (noire)
+}

@@ -343,3 +343,4 @@ t.parent_dir=Bovenliggende map
 m.scrollbars=Schuifbalken
 m.scroll_normal=Normaal
 m.scroll_improved=Verbeterd (langere greep)
+a.animation=Animatie

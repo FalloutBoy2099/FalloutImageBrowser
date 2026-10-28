@@ -343,3 +343,4 @@ t.parent_dir=Överordnad mapp
 m.scrollbars=Rullningslister
 m.scroll_normal=Normala
 m.scroll_improved=Förbättrade (längre handtag)
+a.animation=Animation

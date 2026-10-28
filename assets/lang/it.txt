@@ -343,3 +343,4 @@ t.parent_dir=Cartella superiore
 m.scrollbars=Barre di scorrimento
 m.scroll_normal=Normali
 m.scroll_improved=Migliorate (cursore più lungo)
+a.animation=Animazione

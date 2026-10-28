@@ -343,3 +343,4 @@ t.parent_dir=Dossier parent
 m.scrollbars=Barres de défilement
 m.scroll_normal=Normales
 m.scroll_improved=Améliorées (curseur plus long)
+a.animation=Animation

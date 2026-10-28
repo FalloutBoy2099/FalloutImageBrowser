@@ -1,8 +1,9 @@
-//! Fallout Tactics (Micro Forté) : ZAR (images), TIL (tuiles), SPR (sprites animés). Lecture seule.
+//! Fallout Tactics (Micro Forté) : ZAR (images), TIL (tuiles), SPR (sprites animés).
 //!
 //! Formats non officiels, reconstitués d'après les travaux de la communauté (outils FORT et FTS) ; les entiers sont
 //! petit-boutistes. ZAR : « <zar> », 00 '4' 00, largeur, hauteur, palette 256 × 4 octets, puis des séries RLE.
 //! TIL : conteneur « <tile> » contenant des ZAR. SPR : animations nommées (palettes + images ZAR en forme courte).
+//! Lecture de ZAR, TIL et SPR ; écriture de ZAR seulement.
 
 use super::*;
 use std::io::Read;
@@ -230,6 +231,7 @@ pub fn decode_spr(data: &[u8]) -> Result<Picture> {
         }
         let end = starts.iter().copied().find(|s| *s > anim.data_offset).unwrap_or(data.len());
         let frames = decode_animation(data, anim, end, anchor)?;
+        pic.dir_groups.push((anim.name.clone(), pic.dir_labels.len(), anim.dirs));
         for d in 0..anim.dirs {
             let mut dir_frames: Vec<Frame> = frames[d * anim.frames..(d + 1) * anim.frames].to_vec();
             let last_pos = dir_frames.last().map(|f| f.pos).unwrap_or((0, 0));
@@ -286,6 +288,10 @@ fn decode_animation(data: &[u8], anim: &Anim, end: usize, anchor: (i64, i64)) ->
         palettes.push(raw.chunks_exact(4).map(palette_entry).collect());
         p += 4 + n * 4;
     }
+    // Flux d'images « en couches » : quatre couches par image et direction, chacune avec sa palette et sa position.
+    if let Some(frames) = decode_layered(&payload, &palettes, p, anim, anchor, version) {
+        return Ok(frames);
+    }
     let pal = &palettes[0];
     let total = anim.frames * anim.dirs;
     let mut out = Vec::with_capacity(total);
@@ -318,4 +324,171 @@ fn decode_animation(data: &[u8], anim: &Anim, end: usize, anchor: (i64, i64)) ->
         out.push(frame);
     }
     Ok(out)
+}
+
+/// Écriture d'un ZAR autonome : type 0x34, palette de 256 entrées (B, V, R, alpha) et séries RLE (transparent, opaque, avec alpha).
+pub fn encode_zar(p: &Prepared) -> Result<Vec<u8>> {
+    let f = p.first();
+    let OutData::Indexed(idx) = &f.data else { bail!("ZAR : image indexée requise") };
+    let pal = p.palette.as_ref().ok_or_else(|| anyhow!("ZAR : palette requise"))?;
+    let (w, h) = (f.width as usize, f.height as usize);
+    if idx.len() < w * h {
+        bail!("ZAR : données insuffisantes");
+    }
+    let plane = f.alpha.as_deref().filter(|a| a.len() >= w * h);
+    // Opacité du pixel `k` : celle de son plan s'il existe (conversion), sinon celle de son entrée de palette.
+    let alpha = |k: usize| -> u8 {
+        match plane {
+            Some(a) => a[k],
+            None => {
+                let i = idx[k] as usize;
+                if pal.used[i] { pal.colors[i][3] } else { 255 }
+            }
+        }
+    };
+    // Classe d'un pixel : 0 transparent, 1 opaque, 2 translucide.
+    let class = |k: usize| -> u8 {
+        match alpha(k) {
+            0 => 0,
+            255 => 1,
+            _ => 2,
+        }
+    };
+    let mut runs: Vec<u8> = Vec::with_capacity(w * h / 2 + 16);
+    let px = &idx[..w * h];
+    let mut at = 0usize;
+    while at < px.len() {
+        let c = class(at);
+        let mut n = 1usize;
+        while at + n < px.len() && n < 63 && class(at + n) == c {
+            n += 1;
+        }
+        runs.push(((n as u8) << 2) | c);
+        match c {
+            0 => {}
+            1 => runs.extend_from_slice(&px[at..at + n]),
+            _ => {
+                for k in at..at + n {
+                    runs.extend_from_slice(&[px[k], alpha(k)]);
+                }
+            }
+        }
+        at += n;
+    }
+    let mut o: Vec<u8> = Vec::with_capacity(runs.len() + 1100);
+    o.extend_from_slice(b"<zar>\0");
+    o.push(0x34);
+    o.push(0);
+    o.extend_from_slice(&(w as u32).to_le_bytes());
+    o.extend_from_slice(&(h as u32).to_le_bytes());
+    o.push(1); // palette présente
+    o.extend_from_slice(&256u32.to_le_bytes());
+    for i in 0..256usize {
+        let c = if pal.used[i] { pal.colors[i] } else { [0, 0, 0, 255] };
+        o.extend_from_slice(&[c[2], c[1], c[0], c[3]]);
+    }
+    o.push(0); // couleur par défaut
+    o.extend_from_slice(&(runs.len() as u32).to_le_bytes());
+    o.extend_from_slice(&runs);
+    Ok(o)
+}
+
+/// Superpose un calque RVBA de `lw` × `lh` pixels sur le tampon `buf` (`bw` × `bh`) en `(x, y)` ; ce qui dépasse est coupé.
+fn blend_layer(buf: &mut [u8], bw: usize, bh: usize, layer: &[u8], lw: usize, lh: usize, x: i64, y: i64) {
+    for ly in 0..lh {
+        let dy = ly as i64 + y;
+        if dy < 0 || dy >= bh as i64 {
+            continue;
+        }
+        for lx in 0..lw {
+            let dx = lx as i64 + x;
+            if dx < 0 || dx >= bw as i64 {
+                continue;
+            }
+            let s = &layer[(ly * lw + lx) * 4..(ly * lw + lx) * 4 + 4];
+            let a = s[3] as u32;
+            if a == 0 {
+                continue;
+            }
+            let d = &mut buf[(dy as usize * bw + dx as usize) * 4..][..4];
+            if a == 255 || d[3] == 0 {
+                d.copy_from_slice(s);
+                continue;
+            }
+            // « Source sur destination » en alpha non prémultiplié.
+            let da = d[3] as u32;
+            let out_a = a + da * (255 - a) / 255;
+            for c in 0..3 {
+                d[c] = ((s[c] as u32 * a + d[c] as u32 * da * (255 - a) / 255) / out_a.max(1)) as u8;
+            }
+            d[3] = out_a as u8;
+        }
+    }
+}
+
+/// Images d'une animation dont le flux est fait de calques : pour chaque image et direction, quatre éléments (vide, ou calque
+/// avec sa position puis un ZAR court), rangés par image et direction (collection « 1 ») ou calque par calque (collection « 2 »).
+/// Les calques sont superposés dans l'ordre, chacun avec la palette de son rang. `None` si le flux n'a pas cette forme.
+fn decode_layered(payload: &[u8], palettes: &[Vec<[u8; 3]>], start: usize, anim: &Anim, anchor: (i64, i64), version: u8) -> Option<Vec<Frame>> {
+    let (nf, nd) = (anim.frames, anim.dirs);
+    let count = nf * nd;
+    if count == 0 || anim.rects.len() < count || palettes.len() < 4 {
+        return None;
+    }
+    // Tampons (largeur, hauteur, pixels) par direction puis image, créés au premier calque rencontré.
+    let mut bufs: Vec<Option<(usize, usize, Vec<u8>)>> = (0..count).map(|_| None).collect();
+    let mut budget: usize = 64_000_000;
+    let (mut cur, mut present) = (start, 0usize);
+    for i in 0..count * 4 {
+        match *payload.get(cur)? {
+            0 => cur += 1,
+            b'<' => break,
+            1 => {
+                let (layer, frame, dir) = if version == b'1' { (i % 4, (i / 4) / nd, (i / 4) % nd) } else { (i / count, (i % count) % nf, (i % count) / nf) };
+                let x = le32(payload, cur + 1)? as u32 as i32 as i64;
+                let y = le32(payload, cur + 5)? as u32 as i32 as i64;
+                let z = cur + 9;
+                if payload.get(z..z + 5)? != b"<zar>" {
+                    return None;
+                }
+                let (w, h) = (le32(payload, z + 8)?, le32(payload, z + 12)?);
+                let def = *payload.get(z + 16)?;
+                let size = le32(payload, z + 17)?;
+                let run = payload.get(z + 21..z + 21 + size)?;
+                if w == 0 || h == 0 || w > 16384 || h > 16384 || w * h > budget {
+                    return None;
+                }
+                let rgba = decode_runs(run, w, h, &palettes[layer.min(3)], def);
+                let r = anim.rects[frame * nd + dir];
+                let slot = &mut bufs[dir * nf + frame];
+                if slot.is_none() {
+                    let (rw, rh) = ((r[2] - r[0]).clamp(0, 16384) as usize, (r[3] - r[1]).clamp(0, 16384) as usize);
+                    let (bw, bh) = if rw > 0 && rh > 0 { (rw, rh) } else { ((x.max(0) as usize + w).min(16384), (y.max(0) as usize + h).min(16384)) };
+                    budget = budget.checked_sub(bw * bh)?;
+                    *slot = Some((bw, bh, vec![0u8; bw * bh * 4]));
+                }
+                if let Some((bw, bh, buf)) = slot {
+                    blend_layer(buf, *bw, *bh, &rgba, w, h, x, y);
+                }
+                present += 1;
+                cur = z + 21 + size;
+            }
+            _ => return None,
+        }
+    }
+    if present == 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(count);
+    for dir in 0..nd {
+        for frame in 0..nf {
+            let r = anim.rects[frame * nd + dir];
+            let pos = if r == [0; 4] { (0, 0) } else { ((r[0] - anchor.0) as i32, (r[1] - anchor.1) as i32) };
+            out.push(match bufs[dir * nf + frame].take() {
+                Some((w, h, px)) => Frame { width: w as u32, height: h as u32, pixels: Pixels::Rgba(px), pos, delay_ms: Some(100) },
+                None => Frame { width: 1, height: 1, pixels: Pixels::Rgba(vec![0, 0, 0, 0]), pos, delay_ms: Some(100) },
+            });
+        }
+    }
+    Some(out)
 }

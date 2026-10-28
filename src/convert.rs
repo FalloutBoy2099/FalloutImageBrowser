@@ -149,7 +149,18 @@ pub fn prepare(pic: &Picture, opt: &ConvertOptions, sel: &Selection) -> Result<P
         dir_shift,
         palette: None,
     };
-    let meta = |f: &Frame, data: OutData| OutFrame { width: f.width, height: f.height, data, pos: f.pos, delay_ms: Some(f.delay_ms.unwrap_or(default_delay)) };
+    // ZAR : l'opacité est stockée pixel par pixel, à côté de l'index de palette ; les pixels même peu opaques gardent donc leur couleur.
+    let per_pixel_alpha = opt.format == Format::Zar;
+    let solidify = |rgba: &mut [u8]| {
+        if per_pixel_alpha {
+            for p in rgba.chunks_exact_mut(4) {
+                if p[3] > 0 {
+                    p[3] = 255;
+                }
+            }
+        }
+    };
+    let meta = |f: &Frame, data: OutData| OutFrame { width: f.width, height: f.height, data, pos: f.pos, delay_ms: Some(f.delay_ms.unwrap_or(default_delay)), alpha: None };
 
     match &opt.depth {
         DepthChoice::Rgb16 | DepthChoice::Rgb24 | DepthChoice::Rgba32 => {
@@ -174,7 +185,14 @@ pub fn prepare(pic: &Picture, opt: &ConvertOptions, sel: &Selection) -> Result<P
                 PalChoice::Fallout => ((*palette::fallout()).clone(), Some(0), true, false),
                 PalChoice::Custom(p) => ((**p).clone(), Some(0), true, false),
                 PalChoice::Create => {
-                    let rgbas: Vec<Vec<u8>> = src.iter().map(|f| frame_to_rgba(f, pic.palette.as_ref())).collect();
+                    let rgbas: Vec<Vec<u8>> = src
+                        .iter()
+                        .map(|f| {
+                            let mut v = frame_to_rgba(f, pic.palette.as_ref());
+                            solidify(&mut v);
+                            v
+                        })
+                        .collect();
                     let refs: Vec<&[u8]> = rgbas.iter().map(|v| &v[..]).collect();
                     let mut p = palette::adaptive_palette(&refs, true, opt.bg);
                     palette::snap_6bit(&mut p);
@@ -204,7 +222,14 @@ pub fn prepare(pic: &Picture, opt: &ConvertOptions, sel: &Selection) -> Result<P
                         let t = (0..256usize).find(|&i| sp.used[i] && sp.colors[i][3] == 0).map(|i| i as u8);
                         (sp, t, false, true)
                     } else {
-                        let rgbas: Vec<Vec<u8>> = src.iter().map(|f| frame_to_rgba(f, pic.palette.as_ref())).collect();
+                        let rgbas: Vec<Vec<u8>> = src
+                        .iter()
+                        .map(|f| {
+                            let mut v = frame_to_rgba(f, pic.palette.as_ref());
+                            solidify(&mut v);
+                            v
+                        })
+                        .collect();
                         let any_alpha = rgbas.iter().any(|v| v.chunks_exact(4).any(|p| p[3] < 128));
                         let reserve = caps.indexed_alpha && (any_alpha || caps.index0_transparent);
                         let flat: Vec<Vec<u8>>;
@@ -272,6 +297,7 @@ pub fn prepare(pic: &Picture, opt: &ConvertOptions, sel: &Selection) -> Result<P
                         (Pixels::Indexed(idx), Some(t)) => OutData::Indexed(idx.iter().map(|&i| t[i as usize]).collect()),
                         _ => {
                             let mut rgba = frame_to_rgba(f, pic.palette.as_ref());
+                            solidify(&mut rgba);
                             if !keep_transp {
                                 composite(&mut rgba, opt.bg);
                             }
@@ -279,6 +305,11 @@ pub fn prepare(pic: &Picture, opt: &ConvertOptions, sel: &Selection) -> Result<P
                         }
                     };
                     out.frames.push(meta(f, data));
+                }
+            }
+            if per_pixel_alpha {
+                for (of, f) in out.frames.iter_mut().zip(&src) {
+                    of.alpha = Some(frame_to_rgba(f, pic.palette.as_ref()).chunks_exact(4).map(|p| p[3]).collect());
                 }
             }
             out.palette = Some(work);

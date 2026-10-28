@@ -343,3 +343,4 @@ t.parent_dir=Overordnet mappe
 m.scrollbars=Rullepaneler
 m.scroll_normal=Normale
 m.scroll_improved=Forbedrede (længere håndtag)
+a.animation=Animation

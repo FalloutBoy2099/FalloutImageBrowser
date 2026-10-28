@@ -343,3 +343,4 @@ t.parent_dir=Nadřazená složka
 m.scrollbars=Posuvníky
 m.scroll_normal=Normální
 m.scroll_improved=Vylepšené (delší jezdec)
+a.animation=Animace

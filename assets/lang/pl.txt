@@ -343,3 +343,4 @@ t.parent_dir=Folder nadrzędny
 m.scrollbars=Paski przewijania
 m.scroll_normal=Normalne
 m.scroll_improved=Ulepszone (dłuższy suwak)
+a.animation=Animacja

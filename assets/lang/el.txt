@@ -343,3 +343,4 @@ t.parent_dir=Γονικός φάκελος
 m.scrollbars=Γραμμές κύλισης
 m.scroll_normal=Κανονικές
 m.scroll_improved=Βελτιωμένες (μακρύτερος δείκτης)
+a.animation=Κίνηση

@@ -61,7 +61,7 @@ pub enum Format {
 
 impl Format {
     /// Formats lisibles ET inscriptibles (cibles de conversion).
-    pub const ALL: [Format; 15] = [
+    pub const ALL: [Format; 16] = [
         Format::Art,
         Format::Bmp,
         Format::Dds,
@@ -77,10 +77,11 @@ impl Format {
         Format::Tiff,
         Format::Tga,
         Format::Webp,
+        Format::Zar,
     ];
 
     /// Formats en lecture seule.
-    pub const READ_ONLY: [Format; 10] = [Format::Psd, Format::Pdn, Format::Xcf, Format::Kra, Format::Ora, Format::Ase, Format::Palette, Format::Zar, Format::Til, Format::Spr];
+    pub const READ_ONLY: [Format; 9] = [Format::Psd, Format::Pdn, Format::Xcf, Format::Kra, Format::Ora, Format::Ase, Format::Palette, Format::Til, Format::Spr];
 
     pub fn is_writable(self) -> bool {
         !Self::READ_ONLY.contains(&self)
@@ -232,6 +233,8 @@ pub struct Picture {
     pub dir_shift: Vec<(i32, i32)>,
     /// Libellé de chaque direction (vide : numéros) — ex. les animations d'un SPR Fallout Tactics.
     pub dir_labels: Vec<String>,
+    /// Regroupement des directions en animations nommées (SPR) : (nom, première direction, nombre de directions) ; vide : pas de regroupement.
+    pub dir_groups: Vec<(String, usize, usize)>,
     /// Nombre d'images réelles de chaque direction (vide : `frames_per_dir` partout).
     pub dir_counts: Vec<usize>,
     /// Profondeur d'origine (bits par pixel) du fichier.
@@ -255,6 +258,7 @@ impl Picture {
             action_frame: 0,
             dir_shift: vec![(0, 0)],
             dir_labels: Vec::new(),
+            dir_groups: Vec::new(),
             dir_counts: Vec::new(),
             bpp: 0,
             sections: Vec::new(),

@@ -343,3 +343,4 @@ t.parent_dir=Parent folder
 m.scrollbars=Scrollbars
 m.scroll_normal=Normal
 m.scroll_improved=Improved (longer handle)
+a.animation=Animation

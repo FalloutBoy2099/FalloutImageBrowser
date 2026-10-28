@@ -343,3 +343,4 @@ t.parent_dir=Carpeta superior
 m.scrollbars=Barras de desplazamiento
 m.scroll_normal=Normales
 m.scroll_improved=Mejoradas (control más largo)
+a.animation=Animación

@@ -343,3 +343,4 @@ t.parent_dir=Dosar părinte
 m.scrollbars=Bare de derulare
 m.scroll_normal=Normale
 m.scroll_improved=Îmbunătățite (cursor mai lung)
+a.animation=Animație

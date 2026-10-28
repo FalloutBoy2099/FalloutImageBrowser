@@ -343,3 +343,4 @@ t.parent_dir=Szülőmappa
 m.scrollbars=Görgetősávok
 m.scroll_normal=Normál
 m.scroll_improved=Továbbfejlesztett (hosszabb fogantyú)
+a.animation=Animáció

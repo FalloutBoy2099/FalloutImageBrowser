@@ -477,8 +477,16 @@ impl App {
             ctx,
             |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        if n > 1 {
+                    // SPR : deux lignes (lecture et image, puis animation et direction) ; les autres formats gardent une seule ligne.
+                    let two_rows = !pic.dir_groups.is_empty() && dirs > 1;
+                    // Jamais de retour à la ligne : au plus deux lignes (SPR) ou une seule ; les curseurs et listes se réduisent si la zone est étroite.
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    let room = (rect.width() - 24.0).max(200.0);
+                    let slider_w = (room - if two_rows { 300.0 } else { 450.0 }).clamp(50.0, 150.0);
+                    let anim_w = (room - 410.0).clamp(80.0, 190.0);
+                    // `part` : 1 = lecture et images, 2 = animation et direction ; chaque ligne appelle la même fonction.
+                    let mut controls = |ui: &mut egui::Ui, part: u8| {
+                        if part & 1 != 0 && n > 1 {
                             if icon_button(ui, if playing { Icon::Pause } else { Icon::Play }, &tr(if playing { "a.pause" } else { "a.play" }), false, true).clicked() {
                                 playing = !playing;
                             }
@@ -490,7 +498,7 @@ impl App {
                                 playing = false;
                             }
                             let mut f = frame as u32 + 1;
-                            ui.spacing_mut().slider_width = 150.0;
+                            ui.spacing_mut().slider_width = slider_w;
                             if ui.add(egui::Slider::new(&mut f, 1..=n as u32).suffix(format!(" / {n}"))).changed() {
                                 frame = f as usize - 1;
                                 playing = false;
@@ -500,7 +508,51 @@ impl App {
                                 playing = false;
                             }
                         }
-                        if dirs > 1 {
+                        if part & 2 == 0 {
+                            // rien d'autre sur cette ligne
+                        } else if dirs > 1 && !pic.dir_groups.is_empty() {
+                            // SPR : l'animation (nom) et la direction (1/8...) se choisissent séparément.
+                            let groups = &pic.dir_groups;
+                            let gi = groups.iter().position(|g| dir >= g.1 && dir < g.1 + g.2).unwrap_or(0);
+                            let (mut ng, start, count) = (gi, groups[gi].1, groups[gi].2);
+                            let mut within = dir.saturating_sub(start).min(count.saturating_sub(1));
+                            if groups.len() > 1 {
+                                ui.label(tr("a.animation"));
+                                if icon_button(ui, Icon::Prev, &tr("a.animation"), false, true).clicked() {
+                                    ng = (gi + groups.len() - 1) % groups.len();
+                                }
+                                egui::ComboBox::from_id_salt("anim_combo").selected_text(groups[gi].0.clone()).width(anim_w).show_ui(ui, |ui| {
+                                    for (k, g) in groups.iter().enumerate() {
+                                        ui.selectable_value(&mut ng, k, g.0.clone());
+                                    }
+                                });
+                                if icon_button(ui, Icon::Next, &tr("a.animation"), false, true).clicked() {
+                                    ng = (gi + 1) % groups.len();
+                                }
+                            }
+                            if count > 1 {
+                                if groups.len() > 1 {
+                                    ui.separator();
+                                }
+                                ui.label(tr("a.direction"));
+                                if icon_button(ui, Icon::Prev, &tr("a.direction"), false, true).clicked() {
+                                    within = (within + count - 1) % count;
+                                }
+                                egui::ComboBox::from_id_salt("dir_combo").selected_text(format!("{}/{count}", within + 1)).width(60.0).show_ui(ui, |ui| {
+                                    for d in 0..count {
+                                        ui.selectable_value(&mut within, d, format!("{}/{count}", d + 1));
+                                    }
+                                });
+                                if icon_button(ui, Icon::Next, &tr("a.direction"), false, true).clicked() {
+                                    within = (within + 1) % count;
+                                }
+                            }
+                            // Changer d'animation garde, autant que possible, la même direction.
+                            let new_count = groups[ng].2;
+                            dir = groups[ng].1 + within.min(new_count.saturating_sub(1));
+                            n = pic.dir_len(dir);
+                            frame = frame.min(n.saturating_sub(1));
+                        } else if dirs > 1 {
                             ui.separator();
                             ui.label(tr("a.direction"));
                             if icon_button(ui, Icon::Prev, &tr("a.direction"), false, true).clicked() {
@@ -520,7 +572,42 @@ impl App {
                             n = pic.dir_len(dir);
                             frame = frame.min(n.saturating_sub(1));
                         }
-                    });
+                    };
+                    if two_rows {
+                        // Deux lignes centrées l'une par rapport à l'autre (largeurs mesurées à l'image précédente).
+                        let key = Id::new("anim_rows_w");
+                        let (w1, w2): (f32, f32) = ctx.data(|d| d.get_temp(key)).unwrap_or((0.0, 0.0));
+                        let target = w1.max(w2);
+                        let (mut m1, mut m2) = (0.0f32, 0.0f32);
+                        ui.vertical(|ui| {
+                            let pad1 = ((target - w1) / 2.0).max(0.0);
+                            m1 = ui
+                                .horizontal(|ui| {
+                                    ui.add_space(pad1);
+                                    controls(ui, 1);
+                                })
+                                .response
+                                .rect
+                                .width()
+                                - pad1;
+                            let pad2 = ((target - w2) / 2.0).max(0.0);
+                            m2 = ui
+                                .horizontal(|ui| {
+                                    ui.add_space(pad2);
+                                    controls(ui, 2);
+                                })
+                                .response
+                                .rect
+                                .width()
+                                - pad2;
+                        });
+                        ctx.data_mut(|d| d.insert_temp(key, (m1, m2)));
+                        if (m1 - w1).abs() > 0.5 || (m2 - w2).abs() > 0.5 {
+                            ctx.request_repaint();
+                        }
+                    } else {
+                        ui.horizontal(|ui| controls(ui, 3));
+                    }
                 });
             },
         );

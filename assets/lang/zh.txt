@@ -343,3 +343,4 @@ t.parent_dir=上级文件夹
 m.scrollbars=滚动条
 m.scroll_normal=标准
 m.scroll_improved=增强（更长的滑块）
+a.animation=动画

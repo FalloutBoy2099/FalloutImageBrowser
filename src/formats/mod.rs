@@ -59,6 +59,8 @@ pub struct OutFrame {
     pub data: OutData,
     pub pos: (i32, i32),
     pub delay_ms: Option<u32>,
+    /// Opacité de chaque pixel (0 à 255) pour les formats à palette qui la stockent à part (ZAR) ; `None` : celle de la palette.
+    pub alpha: Option<Vec<u8>>,
 }
 
 /// Image prête à être écrite par un encodeur : les pixels et la palette sont déjà dans
@@ -177,7 +179,9 @@ pub fn caps(f: Format) -> Caps {
         Format::Psd | Format::Pdn | Format::Xcf | Format::Kra | Format::Ora => base,
         Format::Dds => Caps { d16: true, d24: true, d32: true, ..base },
         Format::Qoi | Format::Pnm | Format::Ktx2 => Caps { d24: true, d32: true, ..base },
-        Format::Ase | Format::Palette | Format::Zar | Format::Til | Format::Spr => base,
+        Format::Ase | Format::Palette | Format::Til | Format::Spr => base,
+        // ZAR (Fallout Tactics) : image à palette 256 entrées avec transparence ; le format n'a pas d'autre profondeur.
+        Format::Zar => Caps { indexed: true, indexed_alpha: true, ..base },
     }
 }
 
@@ -313,7 +317,8 @@ pub fn encode(prep: &Prepared, opts: &EncodeOpts) -> Result<Vec<u8>> {
         Format::Tiff => tiff::encode(prep),
         Format::Tga => tga::encode(prep),
         Format::Webp => webp::encode(prep),
-        Format::Psd | Format::Pdn | Format::Xcf | Format::Kra | Format::Ora | Format::Ase | Format::Palette | Format::Zar | Format::Til | Format::Spr => {
+        Format::Zar => tactics::encode_zar(prep),
+        Format::Psd | Format::Pdn | Format::Xcf | Format::Kra | Format::Ora | Format::Ase | Format::Palette | Format::Til | Format::Spr => {
             bail!("{} : format en lecture seule", prep.format.name())
         }
     }

@@ -343,3 +343,4 @@ t.parent_dir=Родительская папка
 m.scrollbars=Полосы прокрутки
 m.scroll_normal=Обычные
 m.scroll_improved=Улучшенные (более длинный ползунок)
+a.animation=Анимация

@@ -343,3 +343,4 @@ t.parent_dir=Ylempi kansio
 m.scrollbars=Vierityspalkit
 m.scroll_normal=Normaali
 m.scroll_improved=Parannettu (pidempi kahva)
+a.animation=Animaatio

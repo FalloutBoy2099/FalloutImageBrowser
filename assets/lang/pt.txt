@@ -343,3 +343,4 @@ t.parent_dir=Pasta superior
 m.scrollbars=Barras de deslocação
 m.scroll_normal=Normais
 m.scroll_improved=Melhoradas (cursor mais longo)
+a.animation=Animação

@@ -64,13 +64,7 @@ impl App {
             self.settings.favorites.remove(i);
         }
         if let Some(p) = open {
-            if crate::dat::stat(&p).is_some() || p.is_dir() {
-                self.open_dir(ctx, &p, false);
-                // Faire défiler jusqu'au dossier choisi (et non jusqu'au fichier affiché, qui peut être ailleurs).
-                self.tree_scroll_to = self.tree.rows.iter().position(|r| r.path == p);
-            } else {
-                self.toast(tr("t.folder_missing"));
-            }
+            self.open_fav_dir(ctx, &p);
         }
     }
 
@@ -224,6 +218,11 @@ impl App {
                         ctx_act = Some((row.path.clone(), 6));
                         ui.close();
                     }
+                    // Conversion par lot de tout le dossier (la fenêtre s'ouvre avec ce dossier dans « Fichiers à convertir »).
+                    if ui.add_enabled(is_dir, egui::Button::new(tr("m.batch"))).clicked() {
+                        ctx_act = Some((row.path.clone(), 9));
+                        ui.close();
+                    }
                 });
             }
         });
@@ -249,6 +248,8 @@ impl App {
                 }
             } else if what == 6 {
                 self.open_anim_dialog(&path);
+            } else if what == 9 {
+                self.open_batch_for(&path);
             } else if what == 7 {
                 self.tree.collapse_children(&path);
             } else {

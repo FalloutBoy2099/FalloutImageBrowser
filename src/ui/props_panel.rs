@@ -2,8 +2,8 @@
 
 use crate::app::App;
 use crate::i18n::{self, tr};
-use crate::model::frame_to_rgba;
 use crate::icons::{Icon, icon_button, small_icon_button};
+use crate::model::frame_to_rgba;
 use crate::props::{collect_props, props_json, props_text, props_xml};
 use eframe::egui::{self, Color32, Ui, vec2};
 
@@ -193,7 +193,9 @@ impl App {
                     h
                 }
             };
-            egui::CollapsingHeader::new(egui::RichText::new(tr("sec.histogram")).strong()).default_open(true).show(ui, |ui| super::histogram::show(ui, &hist, &mut self.settings.histo));
+            egui::CollapsingHeader::new(egui::RichText::new(tr("sec.histogram")).strong())
+                .default_open(true)
+                .show(ui, |ui| super::histogram::show(ui, &hist, &mut self.settings.histo));
         });
         if let Some((second, c)) = picked {
             if second {

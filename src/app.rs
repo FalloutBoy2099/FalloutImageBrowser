@@ -219,6 +219,8 @@ pub struct Settings {
     pub show_grid: bool,
     pub show_pixel_info: bool,
     pub origin: OriginStyle,
+    /// Origine fixe : l'ancrage reste au même endroit de l'écran quand on change d'image.
+    pub lock_origin: bool,
     /// Toutes les directions d'un FRM (ou ART) côte à côte.
     pub show_all_dirs: bool,
     pub onion: bool,
@@ -270,6 +272,7 @@ impl Default for Settings {
             show_grid: false,
             show_pixel_info: true,
             origin: OriginStyle::Off,
+            lock_origin: false,
             show_all_dirs: false,
             onion: false,
             slideshow_secs: 3,
@@ -445,6 +448,21 @@ pub struct App {
     pub last_title: String,
     pub toolbar_w: f32,
     pub win: crate::winprefs::WinPrefs,
+    /// Dernier compteur d'analyses d'archives vu, et ouverture en attente de l'analyse d'une archive (chemin ; vrai = dossier favori).
+    pub dat_gen: u64,
+    pub pending_open: Option<(PathBuf, PendingOpen)>,
+    /// Origine fixe : position de l'ancrage à l'écran (écart au centre de la zone) et dernière vue (déplacement, zoom) qui l'a posée.
+    pub origin_lock: Option<Vec2>,
+    pub origin_lock_view: Option<(Vec2, f32)>,
+}
+
+/// Ce qu'il reste à faire une fois l'archive analysée.
+#[derive(Clone, Copy)]
+pub enum PendingOpen {
+    /// `open_path` (fichier ou dossier).
+    Path,
+    /// `open_dir`, en affichant ou non la première image.
+    Dir { open_first: bool },
 }
 
 impl App {
@@ -504,8 +522,15 @@ impl App {
             last_title: String::new(),
             toolbar_w: 0.0,
             win: crate::winprefs::WinPrefs::load(),
+            dat_gen: 0,
+            pending_open: None,
+            origin_lock: None,
+            origin_lock_view: None,
             settings,
         };
+        // Les archives volumineuses sont analysées en arrière-plan : l'interface est réveillée à la fin.
+        let wake = cc.egui_ctx.clone();
+        crate::dat::set_wake(move || wake.request_repaint());
         app.apply_fonts(&cc.egui_ctx);
         app.tree.sort = app.settings.sort;
         app.tree.descending = app.settings.sort_desc;
@@ -569,7 +594,12 @@ impl App {
     /// Ouverture depuis l'extérieur (ligne de commande, glisser-déposer, boîte de dialogue) :
     /// un fichier ouvre son dossier, qui devient le dossier courant ; une archive .DAT s'ouvre comme un dossier.
     pub fn open_path(&mut self, ctx: &egui::Context, path: &Path) {
-        let kind = match crate::dat::stat(path) {
+        // Archive pas encore analysée : l'analyse tourne en arrière-plan et l'ouverture reprend à sa fin (voir `poll_archives`).
+        if crate::dat::archive_pending(path) {
+            self.pending_open = Some((path.to_path_buf(), PendingOpen::Path));
+            return;
+        }
+        let kind = match crate::dat::stat_nowait(path) {
             Some(crate::dat::Stat::File) => Some(false),
             Some(crate::dat::Stat::Dir) => Some(true),
             None if path.is_dir() => Some(true),
@@ -592,6 +622,10 @@ impl App {
     }
 
     pub fn open_dir(&mut self, ctx: &egui::Context, dir: &Path, open_first: bool) {
+        // Archive pas encore analysée : le dossier est sélectionné tout de suite, la liste des fichiers suit à la fin de l'analyse.
+        if crate::dat::archive_pending(dir) {
+            self.pending_open = Some((dir.to_path_buf(), PendingOpen::Dir { open_first }));
+        }
         self.tree.reveal_dir(dir);
         self.settings.last_dir = Some(dir.to_path_buf());
         self.files = self.tree.files_of(dir);
@@ -622,6 +656,7 @@ impl App {
     }
 
     pub fn reload_dir(&mut self, ctx: &egui::Context) {
+        crate::dat::clear_failed();
         if let Some(dir) = self.tree.selected_dir.clone() {
             self.tree.reload_dir(&dir);
             self.files = self.tree.files_of(&dir);
@@ -699,7 +734,11 @@ impl App {
     pub fn set_shown(&mut self, ctx: &egui::Context, l: Arc<Loaded>) {
         let animated = l.pic.is_animated();
         self.shown = Some(Shown { loaded: l.clone(), dir: 0, frame: 0, tex: HashMap::new(), playing: animated && self.settings.autoplay, clock: 0.0 });
-        self.pan = Vec2::ZERO;
+        // Origine fixe : la vue garde sa place, le canevas replace l'ancrage de la nouvelle image au même endroit.
+        let keep_view = self.settings.lock_origin && !self.fit && matches!(l.pic.format, Format::Frm | Format::Art | Format::Spr);
+        if !keep_view {
+            self.pan = Vec2::ZERO;
+        }
         self.error = None;
         let name = l.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let title = format!("{name} — Fallout Image Browser");
@@ -749,7 +788,43 @@ impl App {
         }
     }
 
+    /// Reprend ce qui attendait l'analyse d'une archive (lancée en arrière-plan) dès qu'elle est terminée.
+    pub fn poll_archives(&mut self, ctx: &egui::Context) {
+        let gen_now = crate::dat::generation();
+        if gen_now == self.dat_gen {
+            return;
+        }
+        self.dat_gen = gen_now;
+        if self.tree.refresh_pending() {
+            self.apply_view_options();
+        }
+        if let Some((p, what)) = self.pending_open.take() {
+            if crate::dat::archive_pending(&p) {
+                self.pending_open = Some((p, what));
+            } else {
+                match what {
+                    PendingOpen::Path => self.open_path(ctx, &p),
+                    PendingOpen::Dir { open_first } => self.open_dir(ctx, &p, open_first),
+                }
+            }
+        }
+    }
+
+    /// Ouvre un dossier favori : réel ou à l'intérieur d'une archive, dont l'analyse ne fige pas l'interface.
+    pub fn open_fav_dir(&mut self, ctx: &egui::Context, p: &Path) {
+        if crate::dat::archive_pending(p) || crate::dat::stat_nowait(p).is_some() || p.is_dir() {
+            self.open_dir(ctx, p, false);
+            // Faire défiler jusqu'au dossier choisi (et non jusqu'au fichier affiché, qui peut être ailleurs).
+            self.tree_scroll_to = self.tree.rows.iter().position(|r| r.path == p);
+        } else {
+            self.toast(tr("t.folder_missing"));
+        }
+    }
+
     pub fn is_loading(&self) -> bool {
+        if crate::dat::busy() {
+            return true;
+        }
         match (&self.wanted, &self.shown) {
             (Some(w), Some(s)) => s.loaded.path != *w && self.error.is_none(),
             (Some(_), None) => self.error.is_none(),
@@ -842,6 +917,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_loader(&ctx);
+        self.poll_archives(&ctx);
         self.track_window(&ctx);
         self.handle_input(&ctx);
         self.advance_animation(&ctx);

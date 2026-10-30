@@ -162,7 +162,7 @@ impl App {
     pub fn folder_window(&mut self, ctx: &egui::Context) {
         let Some((mut text, fresh)) = self.folder_dlg.take() else { return };
         let path = std::path::PathBuf::from(text.trim().trim_matches('"'));
-        let valid = !text.trim().is_empty() && (matches!(crate::dat::stat(&path), Some(crate::dat::Stat::Dir)) || path.is_dir());
+        let valid = !text.trim().is_empty() && (matches!(crate::dat::stat_nowait(&path), Some(crate::dat::Stat::Dir)) || path.is_dir());
         let (mut go, mut cancel) = (false, false);
         let modal = egui::Modal::new(Id::new("folder_dlg")).frame(crate::dialog::frame(ctx)).show(ctx, |ui| {
             ui.set_width(560.0);

@@ -8,6 +8,7 @@ use anyhow::{Result, anyhow, bail};
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -73,9 +74,102 @@ pub fn read_limited(r: impl Read, hint: usize, what: &str) -> Result<Vec<u8>> {
 /// Volume maximal décodé pour lire une entrée d'une archive 7z solide (entrées précédentes du bloc comprises).
 const MAX_7Z_DECODE: u64 = 1 << 30;
 
-fn cache() -> &'static Mutex<HashMap<PathBuf, Arc<Dat>>> {
-    static C: OnceLock<Mutex<HashMap<PathBuf, Arc<Dat>>>> = OnceLock::new();
+/// Une case par archive : son verrou n'est tenu que pendant l'analyse de CETTE archive (le reste du cache et l'interface restent libres).
+type Slot = Arc<Mutex<Option<Arc<Dat>>>>;
+
+fn cache() -> &'static Mutex<HashMap<PathBuf, Slot>> {
+    static C: OnceLock<Mutex<HashMap<PathBuf, Slot>>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Analyses en arrière-plan : archives en cours, archives en échec, compteur de fins d'analyse et rappel de réveil de l'interface.
+struct Background {
+    pending: HashSet<PathBuf>,
+    failed: HashSet<PathBuf>,
+}
+
+fn background() -> &'static Mutex<Background> {
+    static B: OnceLock<Mutex<Background>> = OnceLock::new();
+    B.get_or_init(|| Mutex::new(Background { pending: HashSet::new(), failed: HashSet::new() }))
+}
+
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+type Wake = Box<dyn Fn() + Send + Sync>;
+static WAKE: OnceLock<Wake> = OnceLock::new();
+
+/// Fonction appelée à la fin de chaque analyse en arrière-plan (l'interface y demande un nouveau rendu).
+pub fn set_wake(f: impl Fn() + Send + Sync + 'static) {
+    let _ = WAKE.set(Box::new(f));
+}
+
+/// Nombre d'analyses en arrière-plan terminées (réussies ou non) : change dès qu'il y a du nouveau à afficher.
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::Relaxed)
+}
+
+/// Une analyse d'archive est-elle en cours en arrière-plan ?
+pub fn busy() -> bool {
+    !background().lock().unwrap_or_else(|e| e.into_inner()).pending.is_empty()
+}
+
+/// Oublie les échecs mémorisés (une archive illisible sera de nouveau tentée).
+pub fn clear_failed() {
+    background().lock().unwrap_or_else(|e| e.into_inner()).failed.clear();
+}
+
+/// État de l'archive (déjà analysée ou non), sans jamais bloquer.
+pub enum Ready {
+    Yes(Arc<Dat>),
+    /// Analyse lancée en arrière-plan : réessayer quand `generation()` a changé.
+    Pending,
+    Failed,
+}
+
+/// Index d'une archive si déjà analysé ; sinon l'analyse démarre dans un thread et l'appelant n'attend pas (c'est la
+/// version pour le thread de l'interface : un gros ZIP / 7z ne doit pas la figer).
+pub fn open_nowait(arch: &Path) -> Ready {
+    if let Some(d) = Dat::cached(arch) {
+        return Ready::Yes(d);
+    }
+    {
+        let mut b = background().lock().unwrap_or_else(|e| e.into_inner());
+        if b.failed.contains(arch) {
+            return Ready::Failed;
+        }
+        if !b.pending.insert(arch.to_path_buf()) {
+            return Ready::Pending;
+        }
+    }
+    let p = arch.to_path_buf();
+    std::thread::spawn(move || {
+        let ok = Dat::open(&p).is_ok();
+        {
+            let mut b = background().lock().unwrap_or_else(|e| e.into_inner());
+            b.pending.remove(&p);
+            if !ok {
+                b.failed.insert(p);
+            }
+        }
+        GENERATION.fetch_add(1, Ordering::Relaxed);
+        if let Some(w) = WAKE.get() {
+            w();
+        }
+    });
+    Ready::Pending
+}
+
+/// Comme [`stat`] mais sans attendre l'analyse de l'archive : `None` tant qu'elle n'est pas prête.
+pub fn stat_nowait(path: &Path) -> Option<Stat> {
+    let (arch, inner) = split(path)?;
+    match open_nowait(&arch) {
+        Ready::Yes(dat) => dat.stat_inner(&inner),
+        _ => None,
+    }
+}
+
+/// L'archive qui contient `path` (s'il y en a une) se lit-elle sans attente ? `Pending` : l'analyse est en cours.
+pub fn archive_pending(path: &Path) -> bool {
+    split(path).is_some_and(|(arch, _)| matches!(open_nowait(&arch), Ready::Pending))
 }
 
 pub fn is_dat_ext(p: &Path) -> bool {
@@ -113,18 +207,7 @@ pub enum Stat {
 /// État d'un chemin virtuel : fichier, dossier (y compris la racine de l'archive) ou inexistant.
 pub fn stat(path: &Path) -> Option<Stat> {
     let (arch, inner) = split(path)?;
-    let dat = Dat::open(&arch).ok()?;
-    if inner.is_empty() {
-        return Some(Stat::Dir);
-    }
-    let key = inner.to_lowercase();
-    if dat.lookup.contains_key(&key) {
-        Some(Stat::File)
-    } else if dat.dirs.contains_key(&key) {
-        Some(Stat::Dir)
-    } else {
-        None
-    }
+    Dat::open(&arch).ok()?.stat_inner(&inner)
 }
 
 pub fn read_any(path: &Path) -> Result<Vec<u8>> {
@@ -172,14 +255,37 @@ pub fn walk(dir: &Path) -> Vec<(PathBuf, PathBuf)> {
 
 impl Dat {
     pub fn open(path: &Path) -> Result<Arc<Dat>> {
-        // Le verrou reste pris pendant l'analyse : plusieurs threads qui ouvrent la même archive en même temps ne la lisent qu'une fois.
-        let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(d) = c.get(path) {
+        let slot = cache().lock().unwrap_or_else(|e| e.into_inner()).entry(path.to_path_buf()).or_default().clone();
+        // Le verrou de la case reste pris pendant l'analyse : plusieurs threads qui ouvrent la même archive en même temps ne la lisent qu'une fois.
+        let mut s = slot.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(d) = s.as_ref() {
             return Ok(d.clone());
         }
         let dat = Arc::new(guarded(|| Dat::parse(path))?);
-        c.insert(path.to_path_buf(), dat.clone());
+        *s = Some(dat.clone());
         Ok(dat)
+    }
+
+    /// Index déjà analysé, sans attendre : `None` si l'archive n'a pas encore été lue ou si son analyse est en cours.
+    pub fn cached(path: &Path) -> Option<Arc<Dat>> {
+        let slot = cache().lock().unwrap_or_else(|e| e.into_inner()).get(path)?.clone();
+        let s = slot.try_lock().ok()?;
+        s.clone()
+    }
+
+    /// Fichier, dossier (la racine comprise) ou rien, pour un chemin interne (`""` = racine).
+    fn stat_inner(&self, inner: &str) -> Option<Stat> {
+        if inner.is_empty() {
+            return Some(Stat::Dir);
+        }
+        let key = inner.to_lowercase();
+        if self.lookup.contains_key(&key) {
+            Some(Stat::File)
+        } else if self.dirs.contains_key(&key) {
+            Some(Stat::Dir)
+        } else {
+            None
+        }
     }
 
     pub fn find(&self, inner: &str) -> Option<usize> {

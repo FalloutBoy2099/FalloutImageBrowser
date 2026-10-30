@@ -33,6 +33,8 @@ impl Default for BatchSettings {
 
 pub struct BatchUi {
     pub open: bool,
+    /// Onglet affiché : 0 = fichiers (sources et destination), 1 = paramètres de conversion.
+    pub tab: u8,
     /// Réglages de conversion (sans image source) : même objet que la fenêtre de conversion d'une image.
     pub conv: ConvertUi,
     pub recursive: bool,
@@ -50,6 +52,7 @@ impl BatchUi {
     pub fn new(s: &BatchSettings) -> BatchUi {
         BatchUi {
             open: false,
+            tab: 0,
             conv: ConvertUi::new(&s.conv),
             recursive: s.recursive,
             single_folder: s.single_folder,
@@ -89,6 +92,13 @@ impl App {
         self.batch.conv.error = None;
         self.batch.conv.fix_depth();
         self.batch.open = true;
+    }
+
+    /// Ouvre la conversion par lot avec ce dossier comme seul élément à convertir.
+    pub fn open_batch_for(&mut self, dir: &std::path::Path) {
+        self.batch.items.clear();
+        self.open_batch();
+        self.batch_add_path(dir);
     }
 
     fn batch_add_path(&mut self, path: &std::path::Path) {
@@ -165,80 +175,96 @@ impl App {
         let native = self.settings.taskbar_windows;
         crate::ui::extra_window(ctx, native, "batch_window", tr("b.title"), [600.0, 560.0], true, false, &mut open, |ui| {
             crate::dialog::setup(ui);
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.batch.tab, 0, tr("b.tab_files"));
+                ui.selectable_value(&mut self.batch.tab, 1, tr("b.tab_settings"));
+            });
+            ui.separator();
             ui.add_enabled_ui(!running, |ui| {
-                // --- Fichiers à convertir
-                ui.label(egui::RichText::new(tr("b.sources")).strong());
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button(tr("b.add_files")).clicked()
-                        && let Some(files) = rfd::FileDialog::new().pick_files()
-                    {
-                        let items = files.into_iter().filter(|p| batch::convertible(p)).map(|path| BatchItem { path, rel: PathBuf::new() }).collect();
-                        self.batch.add(items);
-                    }
-                    if ui.button(tr("b.add_folder")).clicked()
-                        && let Some(dir) = rfd::FileDialog::new().pick_folder()
-                    {
-                        self.batch_add_path(&dir);
-                    }
-                    if ui.button(tr("b.add_dat")).clicked()
-                        && let Some(dat) = rfd::FileDialog::new().add_filter("DAT / ZIP / 7Z", &["dat", "DAT", "zip", "ZIP", "7z", "7Z"]).pick_file()
-                    {
-                        self.batch_add_path(&dat);
-                    }
-                    let has_files = !self.files.is_empty();
-                    if ui.add_enabled(has_files, egui::Button::new(tr("b.add_current"))).clicked() {
-                        let items = self.files.iter().filter(|p| batch::convertible(p)).map(|p| BatchItem { path: p.clone(), rel: PathBuf::new() }).collect();
-                        self.batch.add(items);
-                    }
-                });
-                ui.checkbox(&mut self.batch.recursive, tr("b.recursive"));
-                let n = self.batch.items.len();
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(trf("b.count", &[("n", n.to_string())])).weak());
-                    if ui.add_enabled(n > 0, egui::Button::new(tr("b.clear"))).clicked() {
-                        self.batch.items.clear();
-                    }
-                });
-                let row_h = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    egui::ScrollArea::vertical().max_height(row_h * 7.0).auto_shrink([false, true]).show_rows(ui, row_h, n.max(1), |ui, range| {
-                        if n == 0 {
-                            ui.label(egui::RichText::new(tr("b.empty")).weak());
+                if self.batch.tab == 0 {
+                    // --- Fichiers à convertir
+                    ui.label(egui::RichText::new(tr("b.sources")).strong());
+                    // Quatre boutons d'ajout, sur deux lignes de deux.
+                    ui.horizontal(|ui| {
+                        if ui.button(tr("b.add_files")).clicked()
+                            && let Some(files) = rfd::FileDialog::new().pick_files()
+                        {
+                            let items = files.into_iter().filter(|p| batch::convertible(p)).map(|path| BatchItem { path, rel: PathBuf::new() }).collect();
+                            self.batch.add(items);
                         }
-                        for i in range.filter(|i| *i < n) {
-                            let it = &self.batch.items[i];
-                            ui.add(egui::Label::new(it.path.display().to_string()).truncate());
+                        if ui.button(tr("b.add_folder")).clicked()
+                            && let Some(dir) = rfd::FileDialog::new().pick_folder()
+                        {
+                            self.batch_add_path(&dir);
                         }
                     });
-                });
-                ui.separator();
-                // --- Réglages de conversion
-                egui::Grid::new("batch_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                    self.batch.conv.options_rows(ui, true);
-                    ui.label(tr("c.out_dir"));
-                    ui.vertical(|ui| {
-                        ui.radio_value(&mut self.batch.single_folder, false, tr("b.out_source"));
-                        ui.radio_value(&mut self.batch.single_folder, true, tr("b.out_folder"));
-                        ui.add_enabled_ui(self.batch.single_folder, |ui| {
-                            ui.horizontal(|ui| {
-                                if ui.button(tr("c.choose")).clicked() {
-                                    let mut d = rfd::FileDialog::new();
-                                    if let Some(cur) = self.batch.out_dir() {
-                                        d = d.set_directory(cur);
-                                    }
-                                    if let Some(p) = d.pick_folder() {
-                                        self.batch.conv.s.out_dir = Some(p);
-                                    }
-                                }
-                                if let Some(p) = self.batch.out_dir() {
-                                    ui.label(p.display().to_string());
-                                }
-                            });
-                            ui.checkbox(&mut self.batch.keep_tree, tr("b.keep_tree"));
+                    ui.horizontal(|ui| {
+                        if ui.button(tr("b.add_dat")).clicked()
+                            && let Some(dat) = rfd::FileDialog::new().add_filter("DAT / ZIP / 7Z", &["dat", "DAT", "zip", "ZIP", "7z", "7Z"]).pick_file()
+                        {
+                            self.batch_add_path(&dat);
+                        }
+                        let has_files = !self.files.is_empty();
+                        if ui.add_enabled(has_files, egui::Button::new(tr("b.add_current"))).clicked() {
+                            let items = self.files.iter().filter(|p| batch::convertible(p)).map(|p| BatchItem { path: p.clone(), rel: PathBuf::new() }).collect();
+                            self.batch.add(items);
+                        }
+                    });
+                    ui.checkbox(&mut self.batch.recursive, tr("b.recursive"));
+                    let n = self.batch.items.len();
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(trf("b.count", &[("n", n.to_string())])).weak());
+                        if ui.add_enabled(n > 0, egui::Button::new(tr("b.clear"))).clicked() {
+                            self.batch.items.clear();
+                        }
+                    });
+                    let row_h = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
+                    egui::Frame::group(ui.style()).show(ui, |ui| {
+                        egui::ScrollArea::vertical().max_height(row_h * 7.0).auto_shrink([false, true]).show_rows(ui, row_h, n.max(1), |ui, range| {
+                            if n == 0 {
+                                ui.label(egui::RichText::new(tr("b.empty")).weak());
+                            }
+                            for i in range.filter(|i| *i < n) {
+                                let it = &self.batch.items[i];
+                                ui.add(egui::Label::new(it.path.display().to_string()).truncate());
+                            }
                         });
                     });
-                    ui.end_row();
-                });
+                    ui.separator();
+                    // --- Destination
+                    egui::Grid::new("batch_dest").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                        ui.label(tr("c.out_dir"));
+                        ui.vertical(|ui| {
+                            ui.radio_value(&mut self.batch.single_folder, false, tr("b.out_source"));
+                            ui.horizontal(|ui| {
+                                ui.radio_value(&mut self.batch.single_folder, true, tr("b.out_folder"));
+                                ui.add_enabled_ui(self.batch.single_folder, |ui| {
+                                    if ui.button(tr("c.choose")).clicked() {
+                                        let mut d = rfd::FileDialog::new();
+                                        if let Some(cur) = self.batch.out_dir() {
+                                            d = d.set_directory(cur);
+                                        }
+                                        if let Some(p) = d.pick_folder() {
+                                            self.batch.conv.s.out_dir = Some(p);
+                                        }
+                                    }
+                                    if let Some(p) = self.batch.out_dir() {
+                                        ui.label(p.display().to_string());
+                                    }
+                                });
+                            });
+                            ui.add_enabled_ui(self.batch.single_folder, |ui| {
+                                ui.checkbox(&mut self.batch.keep_tree, tr("b.keep_tree"));
+                            });
+                        });
+                        ui.end_row();
+                    });
+                } else {
+                    // --- Réglages de conversion
+                    egui::Grid::new("batch_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                        self.batch.conv.options_rows(ui, true);
+                    });
+                }
             });
             if let Some(e) = &self.batch.conv.error {
                 ui.add_space(4.0);

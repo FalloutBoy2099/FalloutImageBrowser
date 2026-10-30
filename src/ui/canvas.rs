@@ -203,10 +203,15 @@ impl App {
                     self.fit = false;
                 }
             }
+            // Origine fixe : l'ancrage garde sa place à l'écran d'une image (ou d'une direction) à l'autre ; le déplacement n'est alors pas borné ici.
+            let has_anchor = self.shown.as_ref().is_some_and(|s| matches!(s.loaded.pic.format, Format::Frm | Format::Art | Format::Spr));
+            let lock_active = self.settings.lock_origin && has_anchor && !self.fit;
             // Limiter le déplacement.
-            let size_pts = vec2(iw, ih) * self.zoom / ppp;
-            let lim = vec2(size_pts.x * 0.5 + rect.width() * 0.5 - 40.0, size_pts.y * 0.5 + rect.height() * 0.5 - 40.0).max(Vec2::ZERO);
-            self.pan = self.pan.clamp(-lim, lim);
+            if !lock_active {
+                let size_pts = vec2(iw, ih) * self.zoom / ppp;
+                let lim = vec2(size_pts.x * 0.5 + rect.width() * 0.5 - 40.0, size_pts.y * 0.5 + rect.height() * 0.5 - 40.0).max(Vec2::ZERO);
+                self.pan = self.pan.clamp(-lim, lim);
+            }
 
             // Niveau de réduction (pseudo-mipmap) pour les grandes images affichées en petit.
             let mut level = 0u8;
@@ -228,8 +233,7 @@ impl App {
             // Pelure d'oignon : l'image précédente de l'animation, en transparence, sous l'image courante.
             let onion_tex = if self.settings.onion && grid.is_none() { prev_frame.and_then(|f| self.ensure_tex(&ctx, level, f)) } else { None };
             // Point d'ancrage (centre de l'hexagone pour un FRM), dans les coordonnées de la vue transformée.
-            let has_anchor = self.shown.as_ref().is_some_and(|s| matches!(s.loaded.pic.format, Format::Frm | Format::Art | Format::Spr));
-            let anchors: Vec<(f32, f32)> = if self.settings.origin != OriginStyle::Off && has_anchor {
+            let anchor_pts: Vec<(f32, f32)> = if has_anchor {
                 let to_view = |(ax, ay): (i32, i32)| self.transform.map_point(ax as f32, ay as f32, cw0 as usize, ch0 as usize);
                 match (&grid, &self.shown) {
                     (Some(g), _) => (0..g.n).map(|d| to_view(g.anchor(d))).collect(),
@@ -239,6 +243,20 @@ impl App {
             } else {
                 Vec::new()
             };
+            // Origine fixe : si la vue vient d'être déplacée ou zoomée (par l'utilisateur), la position à l'écran de l'ancrage est
+            // retenue ; sinon (autre image, autre direction, rotation...) la vue est décalée pour que l'ancrage reste à cette place.
+            if lock_active && let Some(&(ax, ay)) = anchor_pts.first() {
+                let sc = self.zoom / ppp;
+                let from_center = vec2(ax, ay) * sc - vec2(iw, ih) * sc * 0.5;
+                match (self.origin_lock, self.origin_lock_view) {
+                    (Some(at), Some((pan, zoom))) if pan == self.pan && zoom == self.zoom => self.pan = at - from_center,
+                    _ => self.origin_lock = Some(self.pan + from_center),
+                }
+                self.origin_lock_view = Some((self.pan, self.zoom));
+            } else {
+                self.origin_lock_view = None;
+            }
+            let anchors: Vec<(f32, f32)> = if self.settings.origin != OriginStyle::Off { anchor_pts } else { Vec::new() };
             let mut select_dir: Option<usize> = None;
             let mut pick_color: Option<(bool, [u8; 4])> = None;
             if let Some((tid, w, h)) = tex {
@@ -421,7 +439,13 @@ impl App {
                 // Conversions en un clic, à côté du fichier : inutiles vers le format déjà en place.
                 ui.separator();
                 let fmt = self.shown.as_ref().map(|s| s.loaded.pic.format);
-                for (label, target, with_pal, white) in [("m.quick_frm", Format::Frm, false, false), ("m.quick_frm_pal", Format::Frm, true, false), ("m.quick_frm_pal_death", Format::Frm, true, true), ("m.quick_rix", Format::Rix, false, false)] {
+                for (label, target, with_pal, white) in [
+                    ("m.quick_frm", Format::Frm, false, false),
+                    ("m.quick_frm_pal", Format::Frm, true, false),
+                    ("m.quick_frm_pal_death", Format::Frm, true, true),
+                    ("m.quick_rix", Format::Rix, false, false),
+                    ("m.quick_art", Format::Art, false, false),
+                ] {
                     if ui.add_enabled(fmt != Some(target), egui::Button::new(tr(label))).clicked() {
                         quick = Some((target, with_pal, white));
                         ui.close();
@@ -473,144 +497,138 @@ impl App {
         }
         let (mut n, dirs) = (pic.dir_len(s.dir), pic.directions);
         let (mut dir, mut frame, mut playing) = (s.dir, s.frame, s.playing);
-        egui::Area::new(Id::new("anim_overlay")).order(egui::Order::Foreground).pivot(Align2::CENTER_BOTTOM).fixed_pos(pos2(rect.center().x, rect.bottom() - 12.0)).show(
-            ctx,
-            |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    // SPR : deux lignes (lecture et image, puis animation et direction) ; les autres formats gardent une seule ligne.
-                    let two_rows = !pic.dir_groups.is_empty() && dirs > 1;
-                    // Jamais de retour à la ligne : au plus deux lignes (SPR) ou une seule ; les curseurs et listes se réduisent si la zone est étroite.
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                    let room = (rect.width() - 24.0).max(200.0);
-                    let slider_w = (room - if two_rows { 300.0 } else { 450.0 }).clamp(50.0, 150.0);
-                    let anim_w = (room - 410.0).clamp(80.0, 190.0);
-                    // `part` : 1 = lecture et images, 2 = animation et direction ; chaque ligne appelle la même fonction.
-                    let mut controls = |ui: &mut egui::Ui, part: u8| {
-                        if part & 1 != 0 && n > 1 {
-                            if icon_button(ui, if playing { Icon::Pause } else { Icon::Play }, &tr(if playing { "a.pause" } else { "a.play" }), false, true).clicked() {
-                                playing = !playing;
+        egui::Area::new(Id::new("anim_overlay")).order(egui::Order::Middle).pivot(Align2::CENTER_BOTTOM).fixed_pos(pos2(rect.center().x, rect.bottom() - 12.0)).show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                // SPR : deux lignes (lecture et image, puis animation et direction) ; les autres formats gardent une seule ligne.
+                let two_rows = !pic.dir_groups.is_empty() && dirs > 1;
+                // Jamais de retour à la ligne : au plus deux lignes (SPR) ou une seule ; les curseurs et listes se réduisent si la zone est étroite.
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                let room = (rect.width() - 24.0).max(200.0);
+                let slider_w = (room - if two_rows { 300.0 } else { 450.0 }).clamp(50.0, 150.0);
+                let anim_w = (room - 410.0).clamp(80.0, 190.0);
+                // `part` : 1 = lecture et images, 2 = animation et direction ; chaque ligne appelle la même fonction.
+                let mut controls = |ui: &mut egui::Ui, part: u8| {
+                    if part & 1 != 0 && n > 1 {
+                        if icon_button(ui, if playing { Icon::Pause } else { Icon::Play }, &tr(if playing { "a.pause" } else { "a.play" }), false, true).clicked() {
+                            playing = !playing;
+                        }
+                        ui.separator();
+                        // « Image x / y » : sélection directe de l'image par le curseur, encadré des boutons image précédente / suivante.
+                        ui.label(tr("a.frame"));
+                        if icon_button(ui, Icon::FramePrev, &tr("a.prev_frame"), false, true).clicked() {
+                            frame = (frame + n - 1) % n;
+                            playing = false;
+                        }
+                        let mut f = frame as u32 + 1;
+                        ui.spacing_mut().slider_width = slider_w;
+                        if ui.add(egui::Slider::new(&mut f, 1..=n as u32).suffix(format!(" / {n}"))).changed() {
+                            frame = f as usize - 1;
+                            playing = false;
+                        }
+                        if icon_button(ui, Icon::FrameNext, &tr("a.next_frame"), false, true).clicked() {
+                            frame = (frame + 1) % n;
+                            playing = false;
+                        }
+                    }
+                    if part & 2 == 0 {
+                        // rien d'autre sur cette ligne
+                    } else if dirs > 1 && !pic.dir_groups.is_empty() {
+                        // SPR : l'animation (nom) et la direction (1/8...) se choisissent séparément.
+                        let groups = &pic.dir_groups;
+                        let gi = groups.iter().position(|g| dir >= g.1 && dir < g.1 + g.2).unwrap_or(0);
+                        let (mut ng, start, count) = (gi, groups[gi].1, groups[gi].2);
+                        let mut within = dir.saturating_sub(start).min(count.saturating_sub(1));
+                        if groups.len() > 1 {
+                            ui.label(tr("a.animation"));
+                            if icon_button(ui, Icon::Prev, &tr("a.animation"), false, true).clicked() {
+                                ng = (gi + groups.len() - 1) % groups.len();
                             }
-                            ui.separator();
-                            // « Image x / y » : sélection directe de l'image par le curseur, encadré des boutons image précédente / suivante.
-                            ui.label(tr("a.frame"));
-                            if icon_button(ui, Icon::FramePrev, &tr("a.prev_frame"), false, true).clicked() {
-                                frame = (frame + n - 1) % n;
-                                playing = false;
-                            }
-                            let mut f = frame as u32 + 1;
-                            ui.spacing_mut().slider_width = slider_w;
-                            if ui.add(egui::Slider::new(&mut f, 1..=n as u32).suffix(format!(" / {n}"))).changed() {
-                                frame = f as usize - 1;
-                                playing = false;
-                            }
-                            if icon_button(ui, Icon::FrameNext, &tr("a.next_frame"), false, true).clicked() {
-                                frame = (frame + 1) % n;
-                                playing = false;
+                            egui::ComboBox::from_id_salt("anim_combo").selected_text(groups[gi].0.clone()).width(anim_w).show_ui(ui, |ui| {
+                                for (k, g) in groups.iter().enumerate() {
+                                    ui.selectable_value(&mut ng, k, g.0.clone());
+                                }
+                            });
+                            if icon_button(ui, Icon::Next, &tr("a.animation"), false, true).clicked() {
+                                ng = (gi + 1) % groups.len();
                             }
                         }
-                        if part & 2 == 0 {
-                            // rien d'autre sur cette ligne
-                        } else if dirs > 1 && !pic.dir_groups.is_empty() {
-                            // SPR : l'animation (nom) et la direction (1/8...) se choisissent séparément.
-                            let groups = &pic.dir_groups;
-                            let gi = groups.iter().position(|g| dir >= g.1 && dir < g.1 + g.2).unwrap_or(0);
-                            let (mut ng, start, count) = (gi, groups[gi].1, groups[gi].2);
-                            let mut within = dir.saturating_sub(start).min(count.saturating_sub(1));
+                        if count > 1 {
                             if groups.len() > 1 {
-                                ui.label(tr("a.animation"));
-                                if icon_button(ui, Icon::Prev, &tr("a.animation"), false, true).clicked() {
-                                    ng = (gi + groups.len() - 1) % groups.len();
-                                }
-                                egui::ComboBox::from_id_salt("anim_combo").selected_text(groups[gi].0.clone()).width(anim_w).show_ui(ui, |ui| {
-                                    for (k, g) in groups.iter().enumerate() {
-                                        ui.selectable_value(&mut ng, k, g.0.clone());
-                                    }
-                                });
-                                if icon_button(ui, Icon::Next, &tr("a.animation"), false, true).clicked() {
-                                    ng = (gi + 1) % groups.len();
-                                }
+                                ui.separator();
                             }
-                            if count > 1 {
-                                if groups.len() > 1 {
-                                    ui.separator();
-                                }
-                                ui.label(tr("a.direction"));
-                                if icon_button(ui, Icon::Prev, &tr("a.direction"), false, true).clicked() {
-                                    within = (within + count - 1) % count;
-                                }
-                                egui::ComboBox::from_id_salt("dir_combo").selected_text(format!("{}/{count}", within + 1)).width(60.0).show_ui(ui, |ui| {
-                                    for d in 0..count {
-                                        ui.selectable_value(&mut within, d, format!("{}/{count}", d + 1));
-                                    }
-                                });
-                                if icon_button(ui, Icon::Next, &tr("a.direction"), false, true).clicked() {
-                                    within = (within + 1) % count;
-                                }
-                            }
-                            // Changer d'animation garde, autant que possible, la même direction.
-                            let new_count = groups[ng].2;
-                            dir = groups[ng].1 + within.min(new_count.saturating_sub(1));
-                            n = pic.dir_len(dir);
-                            frame = frame.min(n.saturating_sub(1));
-                        } else if dirs > 1 {
-                            ui.separator();
                             ui.label(tr("a.direction"));
                             if icon_button(ui, Icon::Prev, &tr("a.direction"), false, true).clicked() {
-                                dir = (dir + dirs - 1) % dirs;
+                                within = (within + count - 1) % count;
                             }
-                            egui::ComboBox::from_id_salt("dir_combo").selected_text(pic.dir_label(dir)).width(if pic.dir_labels.is_empty() { 50.0 } else { 230.0 }).show_ui(
-                                ui,
-                                |ui| {
-                                    for d in 0..dirs {
-                                        ui.selectable_value(&mut dir, d, pic.dir_label(d));
-                                    }
-                                },
-                            );
+                            egui::ComboBox::from_id_salt("dir_combo").selected_text(format!("{}/{count}", within + 1)).width(60.0).show_ui(ui, |ui| {
+                                for d in 0..count {
+                                    ui.selectable_value(&mut within, d, format!("{}/{count}", d + 1));
+                                }
+                            });
                             if icon_button(ui, Icon::Next, &tr("a.direction"), false, true).clicked() {
-                                dir = (dir + 1) % dirs;
+                                within = (within + 1) % count;
                             }
-                            n = pic.dir_len(dir);
-                            frame = frame.min(n.saturating_sub(1));
                         }
-                    };
-                    if two_rows {
-                        // Deux lignes centrées l'une par rapport à l'autre (largeurs mesurées à l'image précédente).
-                        let key = Id::new("anim_rows_w");
-                        let (w1, w2): (f32, f32) = ctx.data(|d| d.get_temp(key)).unwrap_or((0.0, 0.0));
-                        let target = w1.max(w2);
-                        let (mut m1, mut m2) = (0.0f32, 0.0f32);
-                        ui.vertical(|ui| {
-                            let pad1 = ((target - w1) / 2.0).max(0.0);
-                            m1 = ui
-                                .horizontal(|ui| {
-                                    ui.add_space(pad1);
-                                    controls(ui, 1);
-                                })
-                                .response
-                                .rect
-                                .width()
-                                - pad1;
-                            let pad2 = ((target - w2) / 2.0).max(0.0);
-                            m2 = ui
-                                .horizontal(|ui| {
-                                    ui.add_space(pad2);
-                                    controls(ui, 2);
-                                })
-                                .response
-                                .rect
-                                .width()
-                                - pad2;
+                        // Changer d'animation garde, autant que possible, la même direction.
+                        let new_count = groups[ng].2;
+                        dir = groups[ng].1 + within.min(new_count.saturating_sub(1));
+                        n = pic.dir_len(dir);
+                        frame = frame.min(n.saturating_sub(1));
+                    } else if dirs > 1 {
+                        ui.separator();
+                        ui.label(tr("a.direction"));
+                        if icon_button(ui, Icon::Prev, &tr("a.direction"), false, true).clicked() {
+                            dir = (dir + dirs - 1) % dirs;
+                        }
+                        egui::ComboBox::from_id_salt("dir_combo").selected_text(pic.dir_label(dir)).width(if pic.dir_labels.is_empty() { 50.0 } else { 230.0 }).show_ui(ui, |ui| {
+                            for d in 0..dirs {
+                                ui.selectable_value(&mut dir, d, pic.dir_label(d));
+                            }
                         });
-                        ctx.data_mut(|d| d.insert_temp(key, (m1, m2)));
-                        if (m1 - w1).abs() > 0.5 || (m2 - w2).abs() > 0.5 {
-                            ctx.request_repaint();
+                        if icon_button(ui, Icon::Next, &tr("a.direction"), false, true).clicked() {
+                            dir = (dir + 1) % dirs;
                         }
-                    } else {
-                        ui.horizontal(|ui| controls(ui, 3));
+                        n = pic.dir_len(dir);
+                        frame = frame.min(n.saturating_sub(1));
                     }
-                });
-            },
-        );
+                };
+                if two_rows {
+                    // Deux lignes centrées l'une par rapport à l'autre (largeurs mesurées à l'image précédente).
+                    let key = Id::new("anim_rows_w");
+                    let (w1, w2): (f32, f32) = ctx.data(|d| d.get_temp(key)).unwrap_or((0.0, 0.0));
+                    let target = w1.max(w2);
+                    let (mut m1, mut m2) = (0.0f32, 0.0f32);
+                    ui.vertical(|ui| {
+                        let pad1 = ((target - w1) / 2.0).max(0.0);
+                        m1 = ui
+                            .horizontal(|ui| {
+                                ui.add_space(pad1);
+                                controls(ui, 1);
+                            })
+                            .response
+                            .rect
+                            .width()
+                            - pad1;
+                        let pad2 = ((target - w2) / 2.0).max(0.0);
+                        m2 = ui
+                            .horizontal(|ui| {
+                                ui.add_space(pad2);
+                                controls(ui, 2);
+                            })
+                            .response
+                            .rect
+                            .width()
+                            - pad2;
+                    });
+                    ctx.data_mut(|d| d.insert_temp(key, (m1, m2)));
+                    if (m1 - w1).abs() > 0.5 || (m2 - w2).abs() > 0.5 {
+                        ctx.request_repaint();
+                    }
+                } else {
+                    ui.horizontal(|ui| controls(ui, 3));
+                }
+            });
+        });
         let changed = self.shown.as_ref().is_some_and(|s| s.dir != dir || s.frame != frame || s.playing != playing);
         if changed {
             let fit = self.fit;

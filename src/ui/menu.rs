@@ -133,6 +133,8 @@ impl App {
                     self.transform = Default::default();
                 }
                 ui.separator();
+                ui.checkbox(&mut self.settings.lock_origin, tr("m.lock_origin"));
+                ui.separator();
                 ui.checkbox(&mut self.settings.show_grid, format!("{}  [G]", tr("m.grid")));
                 ui.checkbox(&mut self.settings.show_pixel_info, tr("m.pixel_info"));
                 ui.menu_button(format!("{}  [A]", tr("m.origin")), |ui| {

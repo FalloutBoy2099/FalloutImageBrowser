@@ -223,13 +223,13 @@ pub fn prepare(pic: &Picture, opt: &ConvertOptions, sel: &Selection) -> Result<P
                         (sp, t, false, true)
                     } else {
                         let rgbas: Vec<Vec<u8>> = src
-                        .iter()
-                        .map(|f| {
-                            let mut v = frame_to_rgba(f, pic.palette.as_ref());
-                            solidify(&mut v);
-                            v
-                        })
-                        .collect();
+                            .iter()
+                            .map(|f| {
+                                let mut v = frame_to_rgba(f, pic.palette.as_ref());
+                                solidify(&mut v);
+                                v
+                            })
+                            .collect();
                         let any_alpha = rgbas.iter().any(|v| v.chunks_exact(4).any(|p| p[3] < 128));
                         let reserve = caps.indexed_alpha && (any_alpha || caps.index0_transparent);
                         let flat: Vec<Vec<u8>>;

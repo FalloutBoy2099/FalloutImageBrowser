@@ -179,7 +179,13 @@ fn draw(ui: &mut Ui, h: &Histogram, set: &HistoSettings) {
             let boxr = Rect::from_min_size(if left { rect.left_top() + vec2(4.0, 4.0) } else { rect.right_top() + vec2(-20.0, 4.0) }, vec2(16.0, 16.0));
             p.rect_filled(boxr, 2.0, Color32::from_gray(26));
             p.rect_stroke(boxr, 2.0, Stroke::new(1.0, Color32::from_gray(150)), egui::StrokeKind::Inside);
-            let col = if n == 0 { Color32::from_gray(80) } else if mask == 0 { Color32::from_gray(230) } else { mix(mask, 245) };
+            let col = if n == 0 {
+                Color32::from_gray(80)
+            } else if mask == 0 {
+                Color32::from_gray(230)
+            } else {
+                mix(mask, 245)
+            };
             let r = boxr.shrink2(vec2(3.0, 3.5));
             p.add(Shape::convex_polygon(vec![r.center_top(), r.left_bottom(), r.right_bottom()], col, Stroke::NONE));
             if resp.hover_pos().is_some_and(|q| boxr.expand(2.0).contains(q)) {

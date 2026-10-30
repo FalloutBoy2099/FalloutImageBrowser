@@ -49,6 +49,8 @@ pub struct DirNode {
     pub archive: bool,
     pub expanded: bool,
     pub loaded: bool,
+    /// Contenu d'archive en attente : l'analyse tourne en arrière-plan, le nœud est rechargé dès qu'elle est finie.
+    pub loading: bool,
     pub children: Vec<DirNode>,
     pub files: Vec<FileEntry>,
 }
@@ -193,19 +195,32 @@ fn root_paths() -> Vec<PathBuf> {
 
 impl DirNode {
     fn new(path: PathBuf, name: String) -> DirNode {
-        DirNode { path, name, archive: false, expanded: false, loaded: false, children: Vec::new(), files: Vec::new() }
+        DirNode { path, name, archive: false, expanded: false, loaded: false, loading: false, children: Vec::new(), files: Vec::new() }
     }
 
     pub fn load(&mut self) {
         if self.loaded {
             return;
         }
+        // Archive .DAT (ou dossier à l'intérieur) : contenu virtuel. L'analyse d'une grosse archive se fait en arrière-plan.
+        let virtual_src = crate::dat::split(&self.path);
+        let mut index = None;
+        if let Some((arch, _)) = &virtual_src {
+            match crate::dat::open_nowait(arch) {
+                crate::dat::Ready::Yes(d) => index = Some(d),
+                crate::dat::Ready::Pending => {
+                    self.loading = true;
+                    return;
+                }
+                crate::dat::Ready::Failed => {}
+            }
+        }
         self.loaded = true;
+        self.loading = false;
         self.children.clear();
         self.files.clear();
-        // Archive .DAT (ou dossier à l'intérieur) : contenu virtuel.
-        if let Some((arch, inner)) = crate::dat::split(&self.path) {
-            if let Ok(dat) = crate::dat::Dat::open(&arch) {
+        if let Some((_, inner)) = virtual_src {
+            if let Some(dat) = index {
                 let (dirs, files) = dat.children(&inner);
                 for d in dirs {
                     self.children.push(DirNode::new(self.path.join(&d), d));
@@ -242,6 +257,19 @@ impl DirNode {
         }
         self.children.sort_by(|a, b| natural_cmp(&a.name, &b.name));
         self.files.sort_by(|a, b| natural_cmp(&a.name, &b.name));
+    }
+
+    /// Recharge les nœuds d'archive dont l'analyse vient de finir ; renvoie vrai si quelque chose a changé.
+    fn refresh_pending(&mut self) -> bool {
+        let mut changed = false;
+        if self.loading {
+            self.load();
+            changed = !self.loading;
+        }
+        for c in &mut self.children {
+            changed |= c.refresh_pending();
+        }
+        changed
     }
 
     fn reload(&mut self) {
@@ -321,6 +349,15 @@ impl Tree {
         }
         self.selected_dir = Some(dir.to_path_buf());
         self.rebuild();
+    }
+
+    /// Après la fin d'une analyse d'archive en arrière-plan : charge ce qui attendait et reconstruit les lignes ; vrai si changé.
+    pub fn refresh_pending(&mut self) -> bool {
+        let changed = self.roots.iter_mut().fold(false, |acc, r| r.refresh_pending() | acc);
+        if changed {
+            self.rebuild();
+        }
+        changed
     }
 
     pub fn toggle(&mut self, path: &Path) {

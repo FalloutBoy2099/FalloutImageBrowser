@@ -88,9 +88,7 @@ pub fn decode(data: &[u8]) -> Result<Picture> {
         s => bail!("KTX2 : supercompression {s} inconnue"),
     };
     let px = w * h;
-    let need = |n: usize| -> Result<()> {
-        if raw.len() < n { bail!("KTX2 : données insuffisantes ({} octets, {n} attendus)", raw.len()) } else { Ok(()) }
-    };
+    let need = |n: usize| -> Result<()> { if raw.len() < n { bail!("KTX2 : données insuffisantes ({} octets, {n} attendus)", raw.len()) } else { Ok(()) } };
     let (rgba, bpp): (Vec<u8>, u32) = match vk {
         VK_R8G8B8A8_UNORM | VK_R8G8B8A8_SRGB => {
             need(px * 4)?;

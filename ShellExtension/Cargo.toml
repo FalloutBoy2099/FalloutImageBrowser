@@ -17,7 +17,7 @@ fallout_image_browser = { path = ".." }
 
 [target.'cfg(windows)'.dependencies]
 # La macro `implement` de `windows` fait référence à `windows_core` : il doit être une dépendance directe.
-windows-core = "0.62"
+windows-core = "0.100"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

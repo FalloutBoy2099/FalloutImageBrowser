@@ -36,9 +36,14 @@ pub fn render_rgba(pic: &Picture, dir: usize, f: usize) -> (usize, usize, Vec<u8
 
 /// Comme `render_rgba`, sans copier les pixels d'une image RGBA qui remplit déjà le canevas.
 pub fn render_rgba_cow(pic: &Picture, dir: usize, f: usize) -> (usize, usize, Cow<'_, [u8]>) {
+    render_rgba_cow_pal(pic, dir, f, None)
+}
+
+/// Comme `render_rgba_cow`, avec une palette de remplacement (animation de palette).
+pub fn render_rgba_cow_pal<'a>(pic: &'a Picture, dir: usize, f: usize, pal: Option<&Palette>) -> (usize, usize, Cow<'a, [u8]>) {
     let frame = &pic.frames[pic.frame_index(dir, f)];
     let (cw, ch) = canvas_size(pic, dir);
-    let rgba = frame_to_rgba_cow(frame, pic.palette.as_ref());
+    let rgba = frame_to_rgba_cow(frame, pal.or(pic.palette.as_ref()));
     if pic.frames_per_dir <= 1 || (cw == frame.width && ch == frame.height) {
         return (frame.width as usize, frame.height as usize, rgba);
     }
@@ -127,13 +132,18 @@ impl DirGrid {
 /// Pixels RGBA de toutes les directions côte à côte pour l'image `f` (les directions plus courtes restent sur leur dernière
 /// image) : (largeur, hauteur, pixels). Les images sont placées d'après leur position, donc alignées sur l'origine commune.
 pub fn render_all_dirs(pic: &Picture, f: usize) -> (usize, usize, Vec<u8>) {
+    render_all_dirs_pal(pic, f, None)
+}
+
+/// Comme `render_all_dirs`, avec une palette de remplacement (animation de palette).
+pub fn render_all_dirs_pal(pic: &Picture, f: usize, pal: Option<&Palette>) -> (usize, usize, Vec<u8>) {
     let g = dir_grid(pic);
     let (w, h) = g.size();
     let (w, h) = (w as usize, h as usize);
     let mut out = vec![0u8; w * h * 4];
     for d in 0..g.n {
         let frame = &pic.frames[pic.frame_index(d, f.min(pic.dir_len(d).saturating_sub(1)))];
-        let rgba = frame_to_rgba_cow(frame, pic.palette.as_ref());
+        let rgba = frame_to_rgba_cow(frame, pal.or(pic.palette.as_ref()));
         let (ax, ay) = g.anchor(d);
         let (ox, oy) = (ax + frame.pos.0, ay + frame.pos.1);
         let (cx, cy) = g.cell_origin(d);

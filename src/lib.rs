@@ -5,12 +5,16 @@
 #![allow(clippy::needless_range_loop, clippy::type_complexity, clippy::too_many_arguments, clippy::enum_variant_names, clippy::manual_checked_ops)]
 
 pub mod app;
+pub mod assemble;
+pub mod assemble_ui;
 pub mod assoc;
 pub mod batch;
 pub mod batch_ui;
 pub mod cli;
+pub mod cli_extra;
 pub mod convert;
 pub mod convert_ui;
+pub mod cycling;
 pub mod dat;
 pub mod dialog;
 pub mod fileops;
@@ -28,6 +32,8 @@ pub mod palette;
 pub mod palette_export;
 pub mod palette_ui;
 pub mod props;
+pub mod remap;
+pub mod remap_ui;
 pub mod thumbs;
 pub mod tree;
 pub mod ui;

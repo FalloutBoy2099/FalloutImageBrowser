@@ -233,6 +233,8 @@ pub struct Settings {
     pub smoothing: Smoothing,
     /// Lecture automatique des animations (FRM, GIF...).
     pub autoplay: bool,
+    /// Animation de la palette Fallout (eau, feux, écrans) pour les images qui utilisent ces couleurs.
+    pub cycling: bool,
     /// Molette : false = zoom, true = image précédente / suivante.
     pub wheel_nav: bool,
     /// Boutons latéraux de la souris : false = précédente / suivante, true = zoom.
@@ -281,6 +283,7 @@ impl Default for Settings {
             pal_path: None,
             smoothing: Smoothing::Auto,
             autoplay: false,
+            cycling: false,
             wheel_nav: false,
             xbtn_zoom: false,
             conv: Default::default(),
@@ -331,6 +334,10 @@ pub struct Shown {
     pub tex: HashMap<(usize, usize, u8, u8), TexEntry>,
     pub playing: bool,
     pub clock: f32,
+    /// L'image utilise des couleurs animées de la palette Fallout (slime, feux, écrans...).
+    pub cycle_ok: bool,
+    /// Cran de l'animation de palette dessiné par les textures actuelles.
+    pub cycle_phase: u64,
 }
 
 #[derive(Default)]
@@ -415,6 +422,8 @@ pub struct App {
     /// Fenêtre « Créer une animation » d'un dossier.
     pub anim_dlg: Option<AnimDlg>,
     pub frm_dlg: Option<crate::frm_ui::FrmDlg>,
+    pub asm_dlg: Option<crate::assemble_ui::AsmDlg>,
+    pub remap_dlg: Option<crate::remap_ui::RemapDlg>,
     /// Texte du filtre de fichiers (zone de saisie au-dessus de l'arborescence).
     pub file_filter: String,
     /// Fenêtre du sélecteur de couleur du fond personnalisé.
@@ -499,6 +508,8 @@ impl App {
             rename_dlg: None,
             anim_dlg: None,
             frm_dlg: None,
+            asm_dlg: None,
+            remap_dlg: None,
             file_filter: String::new(),
             bg_picker_open: false,
             bg_picker_prev: (crate::view::Background::Checker, [64, 64, 64], 255),
@@ -733,7 +744,16 @@ impl App {
 
     pub fn set_shown(&mut self, ctx: &egui::Context, l: Arc<Loaded>) {
         let animated = l.pic.is_animated();
-        self.shown = Some(Shown { loaded: l.clone(), dir: 0, frame: 0, tex: HashMap::new(), playing: animated && self.settings.autoplay, clock: 0.0 });
+        self.shown = Some(Shown {
+            loaded: l.clone(),
+            dir: 0,
+            frame: 0,
+            tex: HashMap::new(),
+            playing: animated && self.settings.autoplay,
+            clock: 0.0,
+            cycle_ok: crate::cycling::uses_cycling(&l.pic),
+            cycle_phase: 0,
+        });
         // Origine fixe : la vue garde sa place, le canevas replace l'ancrage de la nouvelle image au même endroit.
         let keep_view = self.settings.lock_origin && !self.fit && matches!(l.pic.format, Format::Frm | Format::Art | Format::Spr);
         if !keep_view {
@@ -950,6 +970,8 @@ impl eframe::App for App {
         self.rename_window(&ctx);
         self.anim_window(&ctx);
         self.frm_window(&ctx);
+        self.assemble_window(&ctx);
+        self.remap_window(&ctx);
         self.bg_picker_window(&ctx);
         self.toast_overlay(&ctx);
         if self.is_loading() {

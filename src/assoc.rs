@@ -15,7 +15,16 @@ pub struct FileType {
     pub description: &'static str,
 }
 
-pub const FALLOUT: [FileType; 2] = [FileType { ext: "frm", description: "Fallout FRM image" }, FileType { ext: "rix", description: "Fallout RIX image" }];
+pub const FALLOUT: [FileType; 8] = [
+    FileType { ext: "frm", description: "Fallout FRM image" },
+    FileType { ext: "fr0", description: "Fallout FRM image (direction 0)" },
+    FileType { ext: "fr1", description: "Fallout FRM image (direction 1)" },
+    FileType { ext: "fr2", description: "Fallout FRM image (direction 2)" },
+    FileType { ext: "fr3", description: "Fallout FRM image (direction 3)" },
+    FileType { ext: "fr4", description: "Fallout FRM image (direction 4)" },
+    FileType { ext: "fr5", description: "Fallout FRM image (direction 5)" },
+    FileType { ext: "rix", description: "Fallout RIX image" },
+];
 pub const TACTICS: [FileType; 3] = [
     FileType { ext: "zar", description: "Fallout Tactics ZAR image" },
     FileType { ext: "til", description: "Fallout Tactics TIL tile" },
@@ -60,8 +69,8 @@ pub fn mime_xml() -> String {
     s + "</mime-info>\n"
 }
 
-/// Fichier `.desktop` de l'application, déclarant tous les types MIME ci-dessus.
-pub fn desktop_entry(exe: &Path) -> String {
+/// Chemin de l'exécutable prêt à être placé entre guillemets dans une ligne `Exec=`.
+fn exec_path(exe: &Path) -> String {
     // Dans Exec, le chemin est entre guillemets ; `\`, `"`, `` ` `` et `$` y sont protégés, et `%` doublé.
     let mut path = String::new();
     for c in exe.to_string_lossy().chars() {
@@ -76,10 +85,23 @@ pub fn desktop_entry(exe: &Path) -> String {
             c => path.push(c),
         }
     }
+    path
+}
+
+/// Fichier `.desktop` de l'application, déclarant tous les types MIME ci-dessus.
+pub fn desktop_entry(exe: &Path) -> String {
+    let path = exec_path(exe);
     let mimes: String = all().iter().map(|t| format!("{};", mime_type(t.ext))).collect();
     format!(
         "[Desktop Entry]\nType=Application\nName=Fallout Image Browser\nComment=Image viewer and converter for Fallout, Fallout Tactics and Arcanum files\nExec=\"{path}\" %f\nTerminal=false\nCategories=Graphics;Viewer;\nMimeType={mimes}\n"
     )
+}
+
+/// Fichier `.thumbnailer` (Linux : Nautilus, Dolphin, Thunar...) : l'application produit elle-même la vignette PNG.
+pub fn thumbnailer_entry(exe: &Path) -> String {
+    let path = exec_path(exe);
+    let mimes: String = all().iter().map(|t| format!("{};", mime_type(t.ext))).collect();
+    format!("[Thumbnailer Entry]\nTryExec={}\nExec=\"{path}\" thumbnail %i %o --size %s\nMimeType={mimes}\n", exe.display())
 }
 
 // ----------------------------------------------------------------------------- Windows
@@ -172,6 +194,11 @@ mod imp {
         let desktop = apps_dir.join("fallout-image-browser.desktop");
         std::fs::write(&xml, mime_xml()).map_err(|e| format!("{} : {e}", xml.display()))?;
         std::fs::write(&desktop, desktop_entry(exe)).map_err(|e| format!("{} : {e}", desktop.display()))?;
+        // Vignettes dans le gestionnaire de fichiers.
+        let thumbs_dir = data.join("thumbnailers");
+        std::fs::create_dir_all(&thumbs_dir).map_err(|e| format!("{} : {e}", thumbs_dir.display()))?;
+        let thumbnailer = thumbs_dir.join("fallout-image-browser.thumbnailer");
+        std::fs::write(&thumbnailer, thumbnailer_entry(exe)).map_err(|e| format!("{} : {e}", thumbnailer.display()))?;
         optional("update-mime-database", &[&mime_dir]);
         optional("update-desktop-database", &[&apps_dir]);
         let mut cmd = Command::new("xdg-mime");

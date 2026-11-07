@@ -50,6 +50,12 @@ impl App {
                 if item(ui, tr("m.edit_frm"), "", is_frm) {
                     self.open_frm_editor();
                 }
+                if item(ui, tr("m.assemble"), "", true) {
+                    self.open_assemble();
+                }
+                if item(ui, tr("m.remap"), "", has_img) {
+                    self.open_remap(&ctx);
+                }
                 ui.separator();
                 if item(ui, tr("m.batch"), "Ctrl+B", true) {
                     self.open_batch();
@@ -102,6 +108,11 @@ impl App {
                 });
                 ui.separator();
                 ui.checkbox(&mut self.settings.autoplay, tr("m.autoplay"));
+                if ui.checkbox(&mut self.settings.cycling, tr("m.cycling")).on_hover_text(tr("m.cycling_tip")).changed()
+                    && let Some(sh) = &mut self.shown
+                {
+                    sh.tex.clear();
+                }
                 ui.separator();
                 ui.label(tr("m.smoothing"));
                 for (s, k) in [(Smoothing::Auto, "m.smooth_auto"), (Smoothing::On, "m.smooth_on"), (Smoothing::Off, "m.smooth_off")] {

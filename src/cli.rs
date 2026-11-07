@@ -32,6 +32,17 @@ USAGE
       | act (Adobe) | gpl (GIMP) | kpl (Krita) | hex. INPUT may itself be a palette file (PAL, ACT, GPL, KPL,
       HEX): this converts one palette format to another.
 
+  fallout_image_browser assemble <IMAGE>... -o <OUT.frm> [--directions N] [--fps N] [--action N] [-p PAL] [--dither]
+      Build an animated FRM from images given in playback order (PNG, GIF, FRM...). The images are split evenly
+      between the directions (1 to 6). The palette is Fallout's unless -p is given. Never overwrites a file.
+
+  fallout_image_browser remap <INPUT> -p <PAL|fallout> [-o FILE_OR_DIR] [--read-pal P]
+      Give an indexed image another palette: every pixel takes the nearest colour of the target palette.
+      Writes a FRM for a FRM, otherwise an indexed PNG.
+
+  fallout_image_browser thumbnail <INPUT> <OUT.png> [--size PX]
+      Write a PNG thumbnail of the first image (used by the Linux file-manager thumbnailer).
+
   fallout_image_browser extract <INPUT> [-o DIR] [--overwrite] [-q]
       Extract files from a .DAT archive without converting them. INPUT is an archive, a folder inside it
       (archive.dat\\art\\intrface) or one file; the sub-folder layout is kept. Default output folder:
@@ -104,6 +115,9 @@ pub fn is_cli(args: &[String]) -> bool {
     matches!(
         args.first().map(|s| s.as_str()),
         Some("convert")
+            | Some("assemble")
+            | Some("remap")
+            | Some("thumbnail")
             | Some("palette")
             | Some("extract")
             | Some("-h")
@@ -452,6 +466,9 @@ pub fn run(args: &[String]) -> i32 {
         }
         "convert" => {}
         "palette" => return run_palette(args),
+        "assemble" => return crate::cli_extra::run_assemble(args),
+        "remap" => return crate::cli_extra::run_remap(args),
+        "thumbnail" => return crate::cli_extra::run_thumbnail(args),
         "extract" => return run_extract(args),
         _ => {
             print_out(&usage());

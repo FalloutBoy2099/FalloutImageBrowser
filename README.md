@@ -79,6 +79,14 @@ from the specification and checked against test archives.
   list of failures. No existing file is ever overwritten.
 * Image → *Show all directions* (D): the six directions of an FRM (or the directions of an ART) side by side, animated together
   and aligned on the common origin; click a direction to select it.
+* File → *Assemble a FRM from images…*: a list of images in playback order (PNG, animated GIF, another FRM…, reorderable) becomes
+  an animated FRM of 1 to 6 directions (images split evenly between the directions), with frames per second, action frame,
+  Fallout or current palette and optional dithering.
+* File → *Remap to another palette…*: an indexed image gets another palette (Fallout or a `.PAL`); each pixel takes the nearest
+  colour of the target. Before / after preview, then *Save as…* (a FRM stays a FRM, other formats are saved as an indexed PNG).
+* View → *Animate palette colours*: rotates the animated colour ranges of the Fallout palette (slime, monitors, fires, shoreline,
+  indexes 229 to 253) on the images that use them. The bundled `default.pal` leaves these entries undefined, so approximate colours
+  are used for them; a `.PAL` that defines them (the game's own `color.pal`) is used as is.
 * File → *Edit FRM header…*: frames per second, action frame and the X / Y offset of each direction, saved with *Save as…*;
   the images are not re-encoded.
 * The zoom level is kept from one image to the next. Animations (FRM, GIF): manual playback by default,
@@ -115,6 +123,9 @@ fallout_image_browser [path]                       # opens the GUI (file, folder
 fallout_image_browser convert <input> -f <format> [options]
 fallout_image_browser palette <input> -f pal|riff|act|gpl|kpl|hex [-o file|folder]   # the input can be an image or a palette file
 fallout_image_browser extract <input> [-o folder] [--overwrite] [-q]       # input: a .DAT archive, or a folder or file inside one
+fallout_image_browser assemble <image>... -o out.frm [--directions N] [--fps N] [--action N] [-p pal|fallout] [--dither]
+fallout_image_browser remap <input> -p pal|fallout [-o file|folder]        # new palette for an indexed image (FRM -> FRM, otherwise indexed PNG)
+fallout_image_browser thumbnail <input> <out.png> [--size PX]              # PNG thumbnail (used by the Linux thumbnailer)
 ```
 
 * **File mode**: `<input>` is an image. Every readable format is accepted as input, including the read-only ones (PSD, PDN, XCF, KRA, ORA, ASE, ZAR, TIL, SPR, palette files); only the 16 writable formats (ART, BMP, DDS, FRM, GIF, JPEG, KTX2, PCX, PNG, PNM, QOI, RIX, TIFF, TGA, WEBP, ZAR) are valid for `-f`. For animations (SPR, GIF, WebP, APNG): `--frame`, `--direction`, `--sequence`.
@@ -142,6 +153,10 @@ fallout_image_browser palette default.pal -f gpl                         # Fallo
 `ShellExtension\` is a separate project that makes Windows Explorer show thumbnails for Fallout (`.FRM`, `.RIX`), Arcanum (`.ART`) and Fallout Tactics (`.ZAR`, `.TIL`, `.SPR`) files. Run
 `.\ShellExtension\install.ps1` to install it for the current user (no administrator rights) and `uninstall.ps1` to remove it;
 see [ShellExtension/README.md](ShellExtension/README.md).
+
+On Linux, Help → file association also installs a `.thumbnailer` entry so that file managers show thumbnails of these files
+(it calls the `thumbnail` command above). `.FR0` to `.FR5` (one direction per file) are read like `.FRM` and are part of the
+associations and of the Explorer thumbnails. macOS needs an application bundle (Quick Look): not provided.
 
 ## Robustness
 

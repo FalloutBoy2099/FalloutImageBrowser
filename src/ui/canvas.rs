@@ -5,7 +5,7 @@ use crate::i18n::tr;
 use crate::icons::{Icon, icon_button};
 use crate::model::*;
 use crate::view::Background;
-use crate::view::{anchor_in_canvas, box_downscale, can_show_all_dirs, canvas_size, dir_grid, hex_color, pixel_info, render_all_dirs, render_rgba_cow};
+use crate::view::{anchor_in_canvas, box_downscale, can_show_all_dirs, canvas_size, dir_grid, hex_color, pixel_info, render_all_dirs_pal, render_rgba_cow_pal};
 use eframe::egui::{self, Align2, Color32, ColorImage, FontId, Id, Rect, Sense, Stroke, TextureOptions, Ui, Vec2, pos2, vec2};
 use rayon::prelude::*;
 use std::borrow::Cow;
@@ -57,9 +57,20 @@ impl App {
     fn ensure_tex(&mut self, ctx: &egui::Context, level: u8, frame: usize) -> Option<(egui::TextureId, u32, u32)> {
         let smoothing = self.settings.smoothing;
         let transform = self.transform;
+        let cycling = self.settings.cycling;
+        let now_ms = (ctx.input(|i| i.time) * 1000.0) as u64;
         let all = self.settings.show_all_dirs && self.shown.as_ref().is_some_and(|s| can_show_all_dirs(&s.loaded.pic));
         let s = self.shown.as_mut()?;
         let pic = &s.loaded.pic;
+        // Animation de palette : à chaque cran, les textures déjà dessinées sont périmées.
+        let cycled = (cycling && s.cycle_ok).then(|| crate::cycling::cycled(pic.palette.as_ref().unwrap(), now_ms));
+        if cycled.is_some() {
+            let ph = crate::cycling::phase(now_ms);
+            if ph != s.cycle_phase {
+                s.cycle_phase = ph;
+                s.tex.clear();
+            }
+        }
         // Toutes les directions côte à côte : une seule texture, repérée par une « direction » spéciale.
         let dir_key = if all { usize::MAX } else { s.dir };
         let (cw0, ch0) = if all { dir_grid(pic).size() } else { canvas_size(pic, s.dir) };
@@ -73,10 +84,10 @@ impl App {
             let cap = if pic.is_animated() { 96 } else { 8 };
             let k = 1usize << level;
             let (cw, ch, rgba) = if all {
-                let (w, h, v) = render_all_dirs(pic, frame);
+                let (w, h, v) = render_all_dirs_pal(pic, frame, cycled.as_ref());
                 (w, h, Cow::Owned(v))
             } else {
-                render_rgba_cow(pic, s.dir, frame)
+                render_rgba_cow_pal(pic, s.dir, frame, cycled.as_ref())
             };
             let (rgba, cw, ch) = transform.apply_cow(rgba, cw, ch);
             let (rgba, tw, th) = if k > 1 {
@@ -117,6 +128,10 @@ impl App {
 
     pub fn canvas(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        if self.settings.cycling && self.shown.as_ref().is_some_and(|s| s.cycle_ok) {
+            let now_ms = (ctx.input(|i| i.time) * 1000.0) as u64;
+            ctx.request_repaint_after(Duration::from_millis(crate::cycling::next_change_ms(now_ms)));
+        }
         let rect = ui.available_rect_before_wrap();
         let resp = ui.allocate_rect(rect, Sense::click_and_drag());
         let ppp = ctx.pixels_per_point();

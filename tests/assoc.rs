@@ -6,10 +6,10 @@ use std::path::Path;
 
 #[test]
 fn groups_and_labels() {
-    assert_eq!(assoc::list(&assoc::FALLOUT), ".FRM, .RIX");
+    assert_eq!(assoc::list(&assoc::FALLOUT), ".FRM, .FR0, .FR1, .FR2, .FR3, .FR4, .FR5, .RIX");
     assert_eq!(assoc::list(&assoc::TACTICS), ".ZAR, .TIL, .SPR");
     assert_eq!(assoc::list(&assoc::ARCANUM), ".ART");
-    assert_eq!(assoc::all().len(), 6);
+    assert_eq!(assoc::all().len(), 12);
 }
 
 #[test]

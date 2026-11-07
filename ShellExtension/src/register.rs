@@ -13,8 +13,8 @@ use windows::core::PCWSTR;
 pub const CLSID: &str = "{7A3C9D52-4E1B-4F6A-9C2D-5B8E0F1A6D37}";
 /// Identifiant d'interface qui désigne un fournisseur de vignettes dans `ShellEx`.
 pub const THUMBNAIL_HANDLER: &str = "{E357FCCD-A995-4576-B01F-234630154E96}";
-/// Extensions prises en charge : Fallout (FRM, RIX), Arcanum (ART) et Fallout Tactics (ZAR, TIL, SPR).
-pub const EXTENSIONS: [&str; 6] = ["frm", "rix", "art", "zar", "til", "spr"];
+/// Extensions prises en charge : Fallout (FRM, FR0 à FR5, RIX), Arcanum (ART) et Fallout Tactics (ZAR, TIL, SPR).
+pub const EXTENSIONS: [&str; 12] = ["frm", "fr0", "fr1", "fr2", "fr3", "fr4", "fr5", "rix", "art", "zar", "til", "spr"];
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()

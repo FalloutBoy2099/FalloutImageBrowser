@@ -16,6 +16,8 @@ impl App {
             && self.rename_dlg.is_none()
             && self.anim_dlg.is_none()
             && self.frm_dlg.is_none()
+            && self.asm_dlg.is_none()
+            && self.remap_dlg.is_none()
             && !self.bg_picker_open
             && ctx.input(|i| i.key_pressed(egui::Key::Escape))
         {
@@ -37,6 +39,8 @@ impl App {
             || self.rename_dlg.is_some()
             || self.anim_dlg.is_some()
             || self.frm_dlg.is_some()
+            || self.asm_dlg.is_some()
+            || self.remap_dlg.is_some()
             || self.bg_picker_open
         {
             return;

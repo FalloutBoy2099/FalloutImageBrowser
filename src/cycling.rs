@@ -4,7 +4,7 @@
 //! Les plages et les périodes sont celles du moteur de Fallout 2 telles qu'on les connaît (valeurs approximatives, faciles à
 //! ajuster ici).
 
-use crate::model::{Palette, Picture, Pixels};
+use crate::model::{Format, Palette, Picture, Pixels};
 
 /// Une plage d'index qui tourne : de `first` à `last` inclus, d'un cran toutes les `period_ms`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,6 +104,10 @@ pub fn has_cycling(p: &Palette) -> bool {
 
 /// Une image indexée utilise-t-elle ces plages ? Seules comptent celles réellement présentes dans les pixels.
 pub fn uses_cycling(pic: &Picture) -> bool {
+    // Seuls les formats Fallout utilisent ces index comme couleurs animées ; un PNG / GIF 8 bits quelconque n'est pas concerné.
+    if !matches!(pic.format, Format::Frm | Format::Rix) {
+        return false;
+    }
     let Some(pal) = &pic.palette else { return false };
     if !has_cycling(pal) {
         return false;
@@ -171,6 +175,21 @@ mod tests {
         // Une plage définie par la palette n'est pas touchée.
         let r = with_defaults(&pal());
         assert_eq!(r, pal());
+    }
+
+    #[test]
+    fn only_fallout_formats_cycle() {
+        use crate::model::Frame;
+        let mut p = pal();
+        for i in 229..=253 {
+            p.colors[i] = [i as u8, 0, 0, 255];
+        }
+        for (fmt, want) in [(Format::Frm, true), (Format::Rix, true), (Format::Png, false), (Format::Gif, false), (Format::Bmp, false)] {
+            let mut pic = Picture::new(fmt);
+            pic.palette = Some(p.clone());
+            pic.frames.push(Frame { width: 1, height: 1, pixels: Pixels::Indexed(vec![230]), pos: (0, 0), delay_ms: None });
+            assert_eq!(uses_cycling(&pic), want, "{fmt:?}");
+        }
     }
 
     #[test]

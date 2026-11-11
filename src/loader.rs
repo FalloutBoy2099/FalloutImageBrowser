@@ -141,6 +141,18 @@ fn find_sibling_pal(path: &Path) -> Option<PathBuf> {
     None
 }
 
+/// `color.pal` à la racine de l'archive qui contient `path` (celle du jeu : elle définit aussi les couleurs animées).
+fn archive_palette(path: &Path) -> Option<(Arc<Palette>, String)> {
+    let (arch, _) = crate::dat::split(path)?;
+    let pal_path = arch.join("color.pal");
+    if !crate::dat::exists_any(&pal_path) {
+        return None;
+    }
+    let pal = load_pal_file(&pal_path).ok()?;
+    let name = format!("color.pal ({})", arch.file_name()?.to_string_lossy());
+    Some((Arc::new(pal), name))
+}
+
 pub fn load_pal_file(path: &Path) -> Result<Palette, String> {
     let data = crate::dat::read_any(path).map_err(|e| e.to_string())?;
     palette::parse_pal(&data).map_err(|e| format!("{}: {e}", path.display()))
@@ -157,7 +169,10 @@ pub fn load_file(path: &Path, policy: &PalPolicy) -> Result<Loaded, String> {
         PalPolicy::Custom(p, n) => (p.clone(), n.clone()),
         PalPolicy::Auto => match find_sibling_pal(path).and_then(|p| load_pal_file(&p).ok().map(|pal| (pal, p))) {
             Some((pal, p)) => (Arc::new(pal), p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
-            None => (palette::fallout(), "Fallout (default.pal)".into()),
+            None => match archive_palette(path) {
+                Some(found) => found,
+                None => (palette::fallout(), "Fallout (default.pal)".into()),
+            },
         },
     };
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();

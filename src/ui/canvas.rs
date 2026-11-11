@@ -429,7 +429,11 @@ impl App {
             painter.text(rect.center() - vec2(0.0, 12.0), Align2::CENTER_CENTER, name, FontId::proportional(16.0), text_strong);
             painter.text(rect.center() + vec2(0.0, 12.0), Align2::CENTER_CENTER, e, FontId::proportional(13.0), Color32::from_rgb(230, 110, 100));
         } else if self.wanted.is_none() {
-            painter.text(rect.center(), Align2::CENTER_CENTER, tr("s.hint"), FontId::proportional(16.0), text_weak);
+            // Message d'accueil centré : il passe à la ligne selon la largeur de la zone (une seule ligne si elle est assez large).
+            let mut job = egui::text::LayoutJob::simple(tr("s.hint"), FontId::proportional(16.0), text_weak, (rect.width() - 32.0).max(40.0));
+            job.halign = egui::Align::Center;
+            let galley = painter.layout_job(job);
+            painter.galley(rect.center() - galley.rect.center().to_vec2(), galley, text_weak);
         }
         if nav_step != 0 {
             self.step(&ctx, nav_step);

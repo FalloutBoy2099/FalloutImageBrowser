@@ -8,6 +8,17 @@ use eframe::egui::{self, Align, Layout, Response, RichText, Ui, vec2};
 const BUTTON_MIN: (f32, f32) = (112.0, 30.0);
 
 /// Réglages communs à toutes les fenêtres modales, pour que champs, listes, cases et boutons aient la même hauteur et les mêmes espaces.
+/// Texture d'aperçu d'une image RVBA, réduite si un côté dépasse la taille de texture maximale du processeur graphique
+/// (sinon la création de la texture échoue). `None` si l'image est vide.
+pub fn preview_texture(ctx: &egui::Context, name: &str, w: usize, h: usize, rgba: Vec<u8>) -> Option<egui::TextureHandle> {
+    if w == 0 || h == 0 || rgba.len() != w * h * 4 {
+        return None;
+    }
+    let max_side = ctx.input(|i| i.max_texture_side).max(1);
+    let (w, h, rgba) = crate::view::fit_texture(rgba, w, h, max_side);
+    Some(ctx.load_texture(name, egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba), egui::TextureOptions::NEAREST))
+}
+
 pub fn setup(ui: &mut Ui) {
     let spacing = ui.spacing_mut();
     spacing.item_spacing = vec2(10.0, 10.0);

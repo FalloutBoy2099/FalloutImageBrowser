@@ -2,299 +2,16 @@
 
 use crate::convert_ui::ConvertUi;
 use crate::i18n::{self, Lang, tr};
-use crate::loader::{Done, Loaded, Loader, PalPolicy, load_pal_file};
+use crate::loader::{Done, Loader, PalPolicy, load_pal_file};
 use crate::model::*;
 use crate::tree::Tree;
 use eframe::egui::{self, TextureHandle, Vec2};
-use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub const SETTINGS_KEY: &str = "fib_settings_v1";
-
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Debug)]
-pub enum Smoothing {
-    #[default]
-    Auto,
-    On,
-    Off,
-}
-
-/// Curseur des barres de défilement : taille d'egui, ou longueur minimale confortable.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Debug)]
-pub enum ScrollbarStyle {
-    #[default]
-    Normal,
-    Improved,
-}
-
-impl ScrollbarStyle {
-    pub const ALL: [ScrollbarStyle; 2] = [ScrollbarStyle::Normal, ScrollbarStyle::Improved];
-
-    pub fn key(self) -> &'static str {
-        match self {
-            ScrollbarStyle::Normal => "m.scroll_normal",
-            ScrollbarStyle::Improved => "m.scroll_improved",
-        }
-    }
-
-    /// Applique le réglage aux deux thèmes (clair et sombre).
-    pub fn apply(self, ctx: &egui::Context) {
-        let min_len = match self {
-            ScrollbarStyle::Normal => 12.0,
-            ScrollbarStyle::Improved => 56.0,
-        };
-        ctx.all_styles_mut(|s| s.spacing.scroll.handle_min_length = min_len);
-    }
-}
-
-/// Taille des miniatures du mode dossier (plus grand côté, en points).
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Debug)]
-pub enum ThumbSize {
-    Small,
-    #[default]
-    Medium,
-    Large,
-}
-
-impl ThumbSize {
-    pub const ALL: [ThumbSize; 3] = [ThumbSize::Small, ThumbSize::Medium, ThumbSize::Large];
-
-    pub fn px(self) -> u32 {
-        match self {
-            ThumbSize::Small => 64,
-            ThumbSize::Medium => 96,
-            ThumbSize::Large => 128,
-        }
-    }
-
-    pub fn key(self) -> &'static str {
-        match self {
-            ThumbSize::Small => "m.thumb_small",
-            ThumbSize::Medium => "m.thumb_medium",
-            ThumbSize::Large => "m.thumb_large",
-        }
-    }
-}
-
-/// Repère d'ancrage (origine) : désactivé, point, croix ou cible (cercle et croix).
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Debug)]
-pub enum OriginStyle {
-    #[default]
-    Off,
-    Dot,
-    Cross,
-    Target,
-}
-
-impl OriginStyle {
-    pub const ALL: [OriginStyle; 4] = [OriginStyle::Off, OriginStyle::Dot, OriginStyle::Cross, OriginStyle::Target];
-
-    pub fn key(self) -> &'static str {
-        match self {
-            OriginStyle::Off => "m.origin_off",
-            OriginStyle::Dot => "m.origin_dot",
-            OriginStyle::Cross => "m.origin_cross",
-            OriginStyle::Target => "m.origin_target",
-        }
-    }
-
-    /// Style suivant (raccourci A) : revient à « désactivé » après la cible.
-    pub fn next(self) -> OriginStyle {
-        let i = OriginStyle::ALL.iter().position(|s| *s == self).unwrap_or(0);
-        OriginStyle::ALL[(i + 1) % OriginStyle::ALL.len()]
-    }
-}
-
-/// Thème de l'interface : celui du système, sombre ou clair.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Debug)]
-pub enum ThemeChoice {
-    #[default]
-    System,
-    Dark,
-    Light,
-}
-
-impl ThemeChoice {
-    pub fn preference(self) -> egui::ThemePreference {
-        match self {
-            ThemeChoice::System => egui::ThemePreference::System,
-            ThemeChoice::Dark => egui::ThemePreference::Dark,
-            ThemeChoice::Light => egui::ThemePreference::Light,
-        }
-    }
-
-    pub fn key(self) -> &'static str {
-        match self {
-            ThemeChoice::System => "m.theme_system",
-            ThemeChoice::Dark => "m.theme_dark",
-            ThemeChoice::Light => "m.theme_light",
-        }
-    }
-}
-
-/// Échelle verticale de l'histogramme.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Debug)]
-pub enum HistoScale {
-    #[default]
-    Linear,
-    Sqrt,
-    Log,
-}
-
-impl HistoScale {
-    pub fn key(self) -> &'static str {
-        match self {
-            HistoScale::Linear => "histo.lin",
-            HistoScale::Sqrt => "histo.sqrt",
-            HistoScale::Log => "histo.log",
-        }
-    }
-}
-
-/// Présentation de l'histogramme : barres remplies ou courbes.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Debug)]
-pub enum HistoStyle {
-    #[default]
-    Bars,
-    Curve,
-}
-
-impl HistoStyle {
-    pub fn key(self) -> &'static str {
-        match self {
-            HistoStyle::Bars => "histo.bars",
-            HistoStyle::Curve => "histo.curve",
-        }
-    }
-}
-
-/// Réglages de l'histogramme : canaux affichés (R, V, B, luminance), échelle, remplissage, grille et indicateurs d'écrêtage.
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct HistoSettings {
-    pub channels: [bool; 4],
-    pub scale: HistoScale,
-    pub style: HistoStyle,
-    pub grid: bool,
-    pub clip: bool,
-}
-
-impl Default for HistoSettings {
-    fn default() -> Self {
-        HistoSettings { channels: [true, true, true, false], scale: HistoScale::Sqrt, style: HistoStyle::Curve, grid: true, clip: true }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(default)]
-pub struct Settings {
-    pub scrollbars: ScrollbarStyle,
-    /// Panneau de gauche : `false` = arborescence, `true` = mode dossier (miniatures).
-    pub folder_view: bool,
-    pub thumb_size: ThumbSize,
-    pub theme: ThemeChoice,
-    pub histo: HistoSettings,
-    pub lang: Option<Lang>,
-    pub show_tree: bool,
-    pub show_props: bool,
-    /// Bloc « Couleurs » (couleurs 1 et 2) au-dessus des propriétés.
-    pub show_colors: bool,
-    /// Couleurs 1 (clic gauche) et 2 (clic droit) prélevées sur l'image ou la palette (RGBA).
-    pub color1: [u8; 4],
-    pub color2: [u8; 4],
-    /// Tri des fichiers d'un dossier.
-    pub sort: crate::tree::SortKey,
-    pub sort_desc: bool,
-    /// Fond derrière l'image, grille de pixels, infos du pixel sous la souris, repère d'ancrage, pelure d'oignon.
-    pub background: crate::view::Background,
-    /// Couleur du fond « personnalisé ».
-    pub bg_custom: [u8; 3],
-    /// Opacité (0 à 255) du fond « personnalisé » ; en dessous de 255, le damier se voit à travers.
-    pub bg_alpha: u8,
-    /// Couleurs récemment choisies pour le fond personnalisé (la plus récente en premier).
-    pub bg_recent: Vec<[u8; 3]>,
-    pub show_grid: bool,
-    pub show_pixel_info: bool,
-    pub origin: OriginStyle,
-    /// Origine fixe : l'ancrage reste au même endroit de l'écran quand on change d'image.
-    pub lock_origin: bool,
-    /// Toutes les directions d'un FRM (ou ART) côte à côte.
-    pub show_all_dirs: bool,
-    pub onion: bool,
-    /// Délai du diaporama en secondes.
-    pub slideshow_secs: u32,
-    pub last_dir: Option<PathBuf>,
-    /// 0 = auto, 1 = Fallout, 2 = personnalisée
-    pub pal_mode: u8,
-    pub pal_path: Option<PathBuf>,
-    pub smoothing: Smoothing,
-    /// Lecture automatique des animations (FRM, GIF...).
-    pub autoplay: bool,
-    /// Animation de la palette Fallout (eau, feux, écrans) pour les images qui utilisent ces couleurs.
-    pub cycling: bool,
-    /// Molette : false = zoom, true = image précédente / suivante.
-    pub wheel_nav: bool,
-    /// Boutons latéraux de la souris : false = précédente / suivante, true = zoom.
-    pub xbtn_zoom: bool,
-    pub conv: crate::convert_ui::ConvSettings,
-    /// Conversion par lot (fenêtre indépendante).
-    pub batch: crate::batch_ui::BatchSettings,
-    /// Extraction de palette : dernier format (id) et dernier dossier.
-    pub pal_fmt: String,
-    pub pal_dir: Option<PathBuf>,
-    /// Dossiers favoris (5 au plus), affichés au-dessus du filtre de l'arborescence.
-    pub favorites: Vec<PathBuf>,
-    /// Fenêtres supplémentaires indépendantes (lot, À propos, aide) : vraies fenêtres du système, visibles dans la barre des tâches.
-    pub taskbar_windows: bool,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Settings {
-            lang: None,
-            show_tree: true,
-            show_props: false,
-            show_colors: false,
-            theme: Default::default(),
-            folder_view: false,
-            scrollbars: ScrollbarStyle::Normal,
-            thumb_size: ThumbSize::Medium,
-            histo: Default::default(),
-            color1: [0, 0, 0, 255],
-            color2: [255, 255, 255, 255],
-            sort: Default::default(),
-            sort_desc: false,
-            background: Default::default(),
-            bg_custom: [64, 64, 64],
-            bg_alpha: 255,
-            bg_recent: Vec::new(),
-            show_grid: false,
-            show_pixel_info: true,
-            origin: OriginStyle::Off,
-            lock_origin: false,
-            show_all_dirs: false,
-            onion: false,
-            slideshow_secs: 3,
-            last_dir: None,
-            pal_mode: 0,
-            pal_path: None,
-            smoothing: Smoothing::Auto,
-            autoplay: false,
-            cycling: false,
-            wheel_nav: false,
-            xbtn_zoom: false,
-            conv: Default::default(),
-            batch: Default::default(),
-            pal_fmt: "pal".to_string(),
-            pal_dir: None,
-            favorites: Vec::new(),
-            taskbar_windows: false,
-        }
-    }
-}
+pub use crate::cache::*;
+pub use crate::settings::*;
 
 /// État de la fenêtre « Renommer » : fichier, nom en cours de saisie, première image (pour sélectionner le nom).
 pub struct RenameDlg {
@@ -310,85 +27,6 @@ pub struct AnimDlg {
     pub name: String,
     pub out_dir: String,
     pub fresh: bool,
-}
-
-/// Taille maximale d'un fichier (sur le disque) préchargé avec les images voisines.
-/// Favoris ajustables (les trois autres boutons sont réservés : Bureau, Documents, Téléchargements).
-pub const MAX_FAVORITES: usize = 5;
-
-const PREFETCH_MAX_BYTES: u64 = 24 << 20;
-
-pub struct TexEntry {
-    pub handle: TextureHandle,
-    /// Taille en mémoire graphique (RGBA 8 bits).
-    pub bytes: usize,
-    /// Dernier passage d'affichage qui l'a demandée (éviction de la moins récente).
-    pub used: u64,
-}
-
-pub struct Shown {
-    pub loaded: Arc<Loaded>,
-    pub dir: usize,
-    pub frame: usize,
-    /// Textures : (direction, image, niveau de réduction, transformation de la vue).
-    pub tex: HashMap<(usize, usize, u8, u8), TexEntry>,
-    pub playing: bool,
-    pub clock: f32,
-    /// L'image utilise des couleurs animées de la palette Fallout (slime, feux, écrans...).
-    pub cycle_ok: bool,
-    /// Cran de l'animation de palette dessiné par les textures actuelles.
-    pub cycle_phase: u64,
-}
-
-#[derive(Default)]
-pub struct Cache {
-    map: HashMap<PathBuf, Arc<Loaded>>,
-    order: VecDeque<PathBuf>,
-    bytes: usize,
-}
-
-fn est_bytes(l: &Loaded) -> usize {
-    l.pic
-        .frames
-        .iter()
-        .map(|f| match &f.pixels {
-            Pixels::Indexed(v) => v.len(),
-            Pixels::Rgba(v) => v.len(),
-        })
-        .sum()
-}
-
-impl Cache {
-    pub fn get(&mut self, p: &Path) -> Option<Arc<Loaded>> {
-        let v = self.map.get(p).cloned()?;
-        self.order.retain(|x| x != p);
-        self.order.push_back(p.to_path_buf());
-        Some(v)
-    }
-    pub fn insert(&mut self, l: Arc<Loaded>) {
-        let p = l.path.clone();
-        if let Some(old) = self.map.insert(p.clone(), l.clone()) {
-            self.bytes = self.bytes.saturating_sub(est_bytes(&old));
-        }
-        self.bytes += est_bytes(&l);
-        self.order.retain(|x| *x != p);
-        self.order.push_back(p);
-        while (self.order.len() > 12 || self.bytes > 700_000_000) && self.order.len() > 1 {
-            if let Some(old) = self.order.pop_front()
-                && let Some(v) = self.map.remove(&old)
-            {
-                self.bytes = self.bytes.saturating_sub(est_bytes(&v));
-            }
-        }
-    }
-    pub fn contains(&self, p: &Path) -> bool {
-        self.map.contains_key(p)
-    }
-    pub fn clear(&mut self) {
-        self.map.clear();
-        self.order.clear();
-        self.bytes = 0;
-    }
 }
 
 pub struct App {
@@ -424,6 +62,7 @@ pub struct App {
     pub frm_dlg: Option<crate::frm_ui::FrmDlg>,
     pub asm_dlg: Option<crate::assemble_ui::AsmDlg>,
     pub remap_dlg: Option<crate::remap_ui::RemapDlg>,
+    pub cmp_dlg: Option<crate::compare_ui::CompareDlg>,
     /// Texte du filtre de fichiers (zone de saisie au-dessus de l'arborescence).
     pub file_filter: String,
     /// Fenêtre du sélecteur de couleur du fond personnalisé.
@@ -476,7 +115,23 @@ pub enum PendingOpen {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> App {
-        let settings: Settings = cc.storage.and_then(|s| eframe::get_value(s, SETTINGS_KEY)).unwrap_or_default();
+        // Réglages : magasin de préférences (registre sous Windows) ; à défaut, ancien fichier `app.ron` d'eframe.
+        let mut store = crate::store::Store::open();
+        let settings: Settings = match eframe::get_value(&store, SETTINGS_KEY) {
+            Some(s) => s,
+            None => match cc.storage.and_then(|s| eframe::get_value::<Settings>(s, SETTINGS_KEY)) {
+                // Réglages d'une ancienne version (app.ron d'eframe) : migrés une fois, puis l'ancien fichier est supprimé pour
+                // qu'une réinitialisation (ou la suppression de la clé) ne les fasse pas revenir.
+                Some(old) => {
+                    eframe::set_value(&mut store, SETTINGS_KEY, &old);
+                    if let Some(dir) = eframe::storage_dir("FalloutImageBrowser") {
+                        let _ = std::fs::remove_file(dir.join("app.ron"));
+                    }
+                    old
+                }
+                None => Settings::default(),
+            },
+        };
         let forced = std::env::var("FIB_LANG").ok().and_then(|c| Lang::ALL.iter().copied().find(|l| l.code() == c.to_lowercase()));
         let lang = forced.or(settings.lang).unwrap_or_else(Lang::detect);
         i18n::set_lang(lang);
@@ -510,6 +165,7 @@ impl App {
             frm_dlg: None,
             asm_dlg: None,
             remap_dlg: None,
+            cmp_dlg: None,
             file_filter: String::new(),
             bg_picker_open: false,
             bg_picker_prev: (crate::view::Background::Checker, [64, 64, 64], 255),
@@ -601,194 +257,6 @@ impl App {
     }
 
     // ------------------------------------------------------------------ navigation
-
-    /// Ouverture depuis l'extérieur (ligne de commande, glisser-déposer, boîte de dialogue) :
-    /// un fichier ouvre son dossier, qui devient le dossier courant ; une archive .DAT s'ouvre comme un dossier.
-    pub fn open_path(&mut self, ctx: &egui::Context, path: &Path) {
-        // Archive pas encore analysée : l'analyse tourne en arrière-plan et l'ouverture reprend à sa fin (voir `poll_archives`).
-        if crate::dat::archive_pending(path) {
-            self.pending_open = Some((path.to_path_buf(), PendingOpen::Path));
-            return;
-        }
-        let kind = match crate::dat::stat_nowait(path) {
-            Some(crate::dat::Stat::File) => Some(false),
-            Some(crate::dat::Stat::Dir) => Some(true),
-            None if path.is_dir() => Some(true),
-            None if path.is_file() => Some(false),
-            None => None,
-        };
-        match kind {
-            Some(true) => self.open_dir(ctx, path, true),
-            Some(false) => {
-                if let Some(parent) = path.parent() {
-                    self.open_dir(ctx, parent, false);
-                }
-                if crate::model::is_supported(path) {
-                    self.show_file(ctx, path);
-                }
-            }
-            None => return,
-        }
-        self.reveal_in_tree();
-    }
-
-    pub fn open_dir(&mut self, ctx: &egui::Context, dir: &Path, open_first: bool) {
-        // Archive pas encore analysée : le dossier est sélectionné tout de suite, la liste des fichiers suit à la fin de l'analyse.
-        if crate::dat::archive_pending(dir) {
-            self.pending_open = Some((dir.to_path_buf(), PendingOpen::Dir { open_first }));
-        }
-        self.tree.reveal_dir(dir);
-        self.settings.last_dir = Some(dir.to_path_buf());
-        self.files = self.tree.files_of(dir);
-        self.index = None;
-        if open_first {
-            if let Some(first) = self.files.first().cloned() {
-                self.show_file(ctx, &first);
-            } else {
-                self.wanted = None;
-                self.shown = None;
-                self.error = None;
-            }
-        } else if let Some(w) = &self.wanted {
-            self.index = self.files.iter().position(|f| f == w);
-        }
-    }
-
-    /// Applique le tri et le filtre choisis : la liste des fichiers (et donc précédent / suivant) suit l'arborescence.
-    pub fn apply_view_options(&mut self) {
-        self.tree.sort = self.settings.sort;
-        self.tree.descending = self.settings.sort_desc;
-        self.tree.filter = self.file_filter.clone();
-        self.tree.rebuild();
-        if let Some(dir) = self.tree.selected_dir.clone() {
-            self.files = self.tree.files_of(&dir);
-            self.index = self.wanted.as_ref().and_then(|w| self.files.iter().position(|f| f == w));
-        }
-    }
-
-    pub fn reload_dir(&mut self, ctx: &egui::Context) {
-        crate::dat::clear_failed();
-        if let Some(dir) = self.tree.selected_dir.clone() {
-            self.tree.reload_dir(&dir);
-            self.files = self.tree.files_of(&dir);
-            if let Some(w) = self.wanted.clone() {
-                self.index = self.files.iter().position(|f| *f == w);
-            }
-            self.cache.clear();
-            self.thumbs.clear();
-            if let Some(w) = self.wanted.clone() {
-                self.show_file(ctx, &w);
-            }
-        }
-    }
-
-    /// Recharge un dossier de l'arborescence depuis le disque (le dossier courant : liste des fichiers et image comprises).
-    pub fn refresh_dir(&mut self, ctx: &egui::Context, dir: &Path) {
-        if self.tree.selected_dir.as_deref() == Some(dir) {
-            self.reload_dir(ctx);
-        } else {
-            self.tree.reload_dir(dir);
-        }
-    }
-
-    /// Crée une animation FRM / ART à partir des images du dossier et l'affiche.
-    pub fn create_animation(&mut self, ctx: &egui::Context, dir: &Path, out_dir: &Path, name: &str, format: Format) {
-        match crate::batch::build_animation(dir, out_dir, name, format, &self.policy) {
-            Ok((out, n)) => {
-                self.tree.reload_dir(out_dir);
-                self.open_dir(ctx, out_dir, false);
-                self.show_file(ctx, &out);
-                self.reveal_in_tree();
-                let file = out.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-                self.toast(i18n::trf("t.anim_created", &[("file", file), ("n", n.to_string())]));
-            }
-            Err(e) => self.toast(e),
-        }
-    }
-
-    /// Fait défiler l'arborescence jusqu'à l'élément courant (une seule fois, sur demande explicite).
-    pub fn reveal_in_tree(&mut self) {
-        let target = self.wanted.clone().or_else(|| self.tree.selected_dir.clone());
-        if let Some(t) = target {
-            self.tree_scroll_to = self.tree.rows.iter().position(|r| r.path == t);
-        }
-    }
-
-    pub fn show_file(&mut self, ctx: &egui::Context, path: &Path) {
-        self.wanted = Some(path.to_path_buf());
-        self.index = self.files.iter().position(|f| f == path);
-        self.error = None;
-        if let Some(l) = self.cache.get(path) {
-            self.set_shown(ctx, l);
-        } else {
-            self.loader.request(path.to_path_buf(), self.policy.clone());
-        }
-    }
-
-    pub fn step(&mut self, ctx: &egui::Context, delta: i32) {
-        if self.files.is_empty() {
-            return;
-        }
-        let n = self.files.len() as i32;
-        let cur = self.index.map(|i| i as i32).unwrap_or(if delta > 0 { -1 } else { 0 });
-        let next = (cur + delta).rem_euclid(n) as usize;
-        let p = self.files[next].clone();
-        self.show_file(ctx, &p);
-    }
-
-    pub fn goto(&mut self, ctx: &egui::Context, idx: usize) {
-        if let Some(p) = self.files.get(idx).cloned() {
-            self.show_file(ctx, &p);
-        }
-    }
-
-    pub fn set_shown(&mut self, ctx: &egui::Context, l: Arc<Loaded>) {
-        let animated = l.pic.is_animated();
-        self.shown = Some(Shown {
-            loaded: l.clone(),
-            dir: 0,
-            frame: 0,
-            tex: HashMap::new(),
-            playing: animated && self.settings.autoplay,
-            clock: 0.0,
-            cycle_ok: crate::cycling::uses_cycling(&l.pic),
-            cycle_phase: 0,
-        });
-        // Origine fixe : la vue garde sa place, le canevas replace l'ancrage de la nouvelle image au même endroit.
-        let keep_view = self.settings.lock_origin && !self.fit && matches!(l.pic.format, Format::Frm | Format::Art | Format::Spr);
-        if !keep_view {
-            self.pan = Vec2::ZERO;
-        }
-        self.error = None;
-        let name = l.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        let title = format!("{name} — Fallout Image Browser");
-        if title != self.last_title {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
-            self.last_title = title;
-        }
-        self.prefetch_neighbours();
-    }
-
-    fn prefetch_neighbours(&mut self) {
-        let Some(i) = self.index else { return };
-        let n = self.files.len();
-        if n < 2 {
-            return;
-        }
-        let mut v = Vec::new();
-        for d in [1i32, -1, 2, -2] {
-            let j = (i as i32 + d).rem_euclid(n as i32) as usize;
-            let p = self.files[j].clone();
-            // Les très gros fichiers ne sont pas préchargés : leur décodage coûte beaucoup de mémoire pour une image peut-être jamais vue.
-            let huge = std::fs::metadata(&p).is_ok_and(|m| m.len() > PREFETCH_MAX_BYTES);
-            if !huge && !self.cache.contains(&p) && !v.contains(&p) && self.files[j] != self.files[i] {
-                v.push(p);
-            }
-        }
-        if !v.is_empty() {
-            self.loader.prefetch(v, &self.policy);
-        }
-    }
 
     pub fn poll_loader(&mut self, ctx: &egui::Context) {
         while let Ok(Done { path, prefetch: _, result }) = self.loader.rx.try_recv() {
@@ -924,12 +392,19 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// Rien d'autre que les préférences de `store` : l'état interne d'egui n'est pas conservé sur le disque.
+    fn persist_egui_memory(&self) -> bool {
+        false
+    }
+
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.settings.conv = self.conv.to_settings();
         self.settings.batch = self.batch.to_settings();
         self.settings.pal_fmt = self.pal_dlg.fmt.id().to_string();
-        eframe::set_value(storage, SETTINGS_KEY, &self.settings);
+        eframe::set_value(&mut crate::store::Store::open(), SETTINGS_KEY, &self.settings);
         self.win.save();
+        // Les réglages ne vivent plus dans le stockage d'eframe : on y retire l'ancienne clé, que eframe réécrirait sinon.
+        storage.remove_string(SETTINGS_KEY);
         // eframe relit toujours cette clé au démarrage : on la neutralise, la géométrie est gérée par WinPrefs.
         storage.set_string("window", String::new());
     }
@@ -972,6 +447,7 @@ impl eframe::App for App {
         self.frm_window(&ctx);
         self.assemble_window(&ctx);
         self.remap_window(&ctx);
+        self.compare_window(&ctx);
         self.bg_picker_window(&ctx);
         self.toast_overlay(&ctx);
         if self.is_loading() {

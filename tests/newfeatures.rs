@@ -95,10 +95,14 @@ fn remap_to_a_reduced_palette_changes_indexes() {
         pal.used[i] = true;
     }
     pal.colors[0][3] = 0;
-    let pal_file = d.join("grey.pal");
+    let pal_file = d.join("target_grey.pal");
     std::fs::write(&pal_file, fallout_image_browser::palette::write_pal(&pal)).unwrap();
     let out = d.join("grey.frm");
     assert_eq!(cli::run(&args(&["remap", src.to_str().unwrap(), "-p", pal_file.to_str().unwrap(), "-o", out.to_str().unwrap()])), 0);
+    // Le FRM n'embarque pas sa palette : la palette cible est écrite à côté.
+    let shipped = std::fs::read(out.with_extension("pal")).expect("grey.pal");
+    let shipped = fallout_image_browser::palette::parse_pal(&shipped).unwrap();
+    assert_eq!(shipped.colors[100][..3], pal.colors[100][..3]);
     let b = load_file(&out, &PalPolicy::Custom(std::sync::Arc::new(pal), "grey".into())).unwrap();
     let rgba = frame_to_rgba(&b.pic.frames[0], b.pic.palette.as_ref());
     assert!(rgba.chunks_exact(4).all(|p| p[3] == 0 || (p[0] == p[1] && p[1] == p[2])));
@@ -152,4 +156,66 @@ fn fallout_palette_has_animated_colours_that_rotate() {
     let b = fallout_image_browser::cycling::cycled(&pal, 150);
     assert_ne!(a.colors[229..=253], b.colors[229..=253]);
     assert_eq!(a.colors[..229], b.colors[..229]);
+}
+
+#[test]
+fn frm_in_an_archive_uses_the_color_pal_of_that_archive() {
+    use fallout_image_browser::dat;
+    let d = tmp("colorpal");
+    let frm = std::fs::read("_test_files/fallout/EXP.FRM").unwrap();
+    // color.pal du jeu simulée : Fallout, mais avec l'index 229 en vert vif (6 bits).
+    let mut raw = std::fs::read("assets/default.pal").unwrap();
+    for i in 229..256 {
+        raw[i * 3..i * 3 + 3].copy_from_slice(&[0, 40, 0]);
+    }
+    let with_pal = dat::write_dat2(&[(r"art\misc\exp.frm", &frm, true), ("color.pal", &raw, true)]);
+    let without = dat::write_dat2(&[(r"art\misc\exp.frm", &frm, true)]);
+    std::fs::write(d.join("a.dat"), with_pal).unwrap();
+    std::fs::write(d.join("b.dat"), without).unwrap();
+    let a = load_file(&d.join("a.dat").join("art").join("misc").join("exp.frm"), &PalPolicy::Auto).unwrap();
+    assert!(a.pic.palette.as_ref().unwrap().used[229]);
+    assert_eq!(a.pic.palette.as_ref().unwrap().colors[229], [0, 160, 0, 255]);
+    assert!(a.pic.sections.iter().flat_map(|s| s.items.iter()).any(|p| format!("{p:?}").contains("color.pal")));
+    let b = load_file(&d.join("b.dat").join("art").join("misc").join("exp.frm"), &PalPolicy::Auto).unwrap();
+    assert!(!b.pic.palette.as_ref().unwrap().used[229]);
+    // Un choix explicite de palette garde la priorité.
+    let c = load_file(&d.join("a.dat").join("art").join("misc").join("exp.frm"), &PalPolicy::Fallout).unwrap();
+    assert!(!c.pic.palette.as_ref().unwrap().used[229]);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn reassembling_a_frm_keeps_offsets_and_direction_shifts() {
+    let d = tmp("reasm");
+    let src = d.join("HMJMPSAA.FRM");
+    std::fs::copy("_test_files/fallout/HMJMPSAA.FRM", &src).unwrap();
+    let a = load_file(&src, &PalPolicy::Fallout).unwrap();
+    let out = d.join("again.frm");
+    let dirs = a.pic.directions.to_string();
+    assert_eq!(cli::run(&args(&["assemble", src.to_str().unwrap(), "-o", out.to_str().unwrap(), "--directions", &dirs, "--fps", &a.pic.fps.to_string()])), 0);
+    let b = load_file(&out, &PalPolicy::Fallout).unwrap();
+    assert_eq!(a.pic.dir_shift, b.pic.dir_shift);
+    assert_eq!(a.pic.frames.len(), b.pic.frames.len());
+    for (x, y) in a.pic.frames.iter().zip(&b.pic.frames) {
+        assert_eq!((x.width, x.height, x.pos), (y.width, y.height, y.pos));
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn textures_are_shrunk_to_the_gpu_limit() {
+    use fallout_image_browser::view::fit_texture;
+    let (w, h, v) = fit_texture(vec![255; 100 * 40 * 4], 100, 40, 50);
+    assert_eq!((w, h, v.len()), (50, 20, 50 * 20 * 4));
+    let (w, h, v) = fit_texture(vec![1; 10 * 10 * 4], 10, 10, 50);
+    assert_eq!((w, h, v.len()), (10, 10, 400));
+}
+
+#[test]
+fn grid_alignment_of_palettes() {
+    let fallout = fallout_image_browser::palette::fallout();
+    assert!(fallout_image_browser::palette::is_grid_aligned(&fallout));
+    let mut p = (*fallout).clone();
+    p.colors[10] = [253, 1, 2, 255];
+    assert!(!fallout_image_browser::palette::is_grid_aligned(&p));
 }

@@ -28,6 +28,22 @@ fn canvas_offset(pic: &Picture, dir: usize, frame: &Frame) -> (i32, i32) {
     (frame.pos.0 - x0, frame.pos.1 - y0)
 }
 
+/// Réduit une image RVBA pour que ses deux côtés tiennent dans `max_side` pixels (inchangée si elle y tient déjà).
+pub fn fit_texture(rgba: Vec<u8>, w: usize, h: usize, max_side: usize) -> (usize, usize, Vec<u8>) {
+    if w.max(h) <= max_side {
+        return (w, h, rgba);
+    }
+    let k = max_side as f64 / w.max(h) as f64;
+    let (nw, nh) = (((w as f64 * k).floor() as u32).max(1), ((h as f64 * k).floor() as u32).max(1));
+    match image::RgbaImage::from_raw(w as u32, h as u32, rgba) {
+        Some(img) => {
+            let small = image::imageops::resize(&img, nw, nh, image::imageops::FilterType::Triangle);
+            (nw as usize, nh as usize, small.into_raw())
+        }
+        None => (1, 1, vec![0, 0, 0, 0]),
+    }
+}
+
 /// Pixels RGBA du canevas de la direction `dir` pour l'image `f` : (largeur, hauteur, pixels).
 pub fn render_rgba(pic: &Picture, dir: usize, f: usize) -> (usize, usize, Vec<u8>) {
     let (w, h, rgba) = render_rgba_cow(pic, dir, f);

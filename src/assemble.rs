@@ -20,30 +20,52 @@ pub struct AssembleOptions {
     /// Palette cible ; `None` = palette Fallout.
     pub palette: Option<Arc<Palette>>,
     pub dither: bool,
+    /// Décalage de chaque direction (si fourni et de la bonne longueur) ; sinon (0, 0).
+    pub dir_shift: Option<Vec<(i32, i32)>>,
 }
 
 impl Default for AssembleOptions {
     fn default() -> Self {
-        AssembleOptions { directions: 1, fps: 10, action_frame: 0, palette: None, dither: false }
+        AssembleOptions { directions: 1, fps: 10, action_frame: 0, palette: None, dither: false, dir_shift: None }
     }
 }
 
-/// Toutes les images d'une liste de fichiers (un GIF ou un FRM en fournit plusieurs), en RVBA.
-pub fn load_frames(files: &[PathBuf]) -> Result<Vec<Frame>> {
-    let mut out = Vec::new();
+/// Images lues dans une liste de fichiers.
+pub struct Sources {
+    pub frames: Vec<Frame>,
+    /// Décalages de directions du fichier source quand c'est un FRM unique : réassembler un FRM les conserve.
+    pub dir_shift: Option<Vec<(i32, i32)>>,
+}
+
+/// Toutes les images d'une liste de fichiers (un GIF ou un FRM en fournit plusieurs), en RVBA. Les images d'un FRM gardent leur
+/// position ; les autres sont centrées sur leur point d'ancrage (milieu du bas). Les FRM sont lus avec leur `.PAL` voisin (ou
+/// le `color.pal` de leur archive), à défaut avec la palette Fallout.
+pub fn load_sources(files: &[PathBuf]) -> Result<Sources> {
+    let mut frames = Vec::new();
+    let mut dir_shift = None;
     for path in files {
-        let loaded = load_file(path, &PalPolicy::Fallout).map_err(|e| anyhow::anyhow!("{} : {e}", path.display()))?;
+        let loaded = load_file(path, &PalPolicy::Auto).map_err(|e| anyhow::anyhow!("{} : {e}", path.display()))?;
         let pic = &loaded.pic;
         if pic.frames.is_empty() {
             bail!("{} : aucune image", path.display());
         }
+        let keep_pos = pic.format == Format::Frm;
+        if keep_pos && files.len() == 1 {
+            dir_shift = Some(pic.dir_shift.clone());
+        }
         for f in &pic.frames {
             let rgba = frame_to_rgba(f, pic.palette.as_ref());
             let (w, h) = (f.width as i32, f.height as i32);
-            out.push(Frame { width: f.width, height: f.height, pixels: Pixels::Rgba(rgba), pos: (-(w / 2), -h), delay_ms: None });
+            let pos = if keep_pos { f.pos } else { (-(w / 2), -h) };
+            frames.push(Frame { width: f.width, height: f.height, pixels: Pixels::Rgba(rgba), pos, delay_ms: None });
         }
     }
-    Ok(out)
+    Ok(Sources { frames, dir_shift })
+}
+
+/// Comme `load_sources`, sans les décalages de directions.
+pub fn load_frames(files: &[PathBuf]) -> Result<Vec<Frame>> {
+    load_sources(files).map(|s| s.frames)
 }
 
 /// Image multi-directions prête à être convertie.
@@ -67,7 +89,10 @@ pub fn build_picture(frames: Vec<Frame>, opt: &AssembleOptions) -> Result<Pictur
     pic.frames_per_dir = fpd;
     pic.fps = opt.fps.clamp(1, 65535);
     pic.action_frame = opt.action_frame.min(fpd as u32 - 1);
-    pic.dir_shift = vec![(0, 0); dirs];
+    pic.dir_shift = match &opt.dir_shift {
+        Some(v) if v.len() == dirs => v.clone(),
+        _ => vec![(0, 0); dirs],
+    };
     pic.frames = frames;
     Ok(pic)
 }

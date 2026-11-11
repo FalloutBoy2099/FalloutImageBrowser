@@ -1,4 +1,4 @@
-//! Mémorisation de la taille et de la position de la fenêtre (fichier texte `window.txt`).
+//! Mémorisation de la taille et de la position de la fenêtre (valeur `window_prefs` du magasin de préférences, voir `store`).
 
 use std::path::PathBuf;
 
@@ -16,6 +16,10 @@ impl Default for WinPrefs {
     }
 }
 
+/// Nom de la valeur dans le magasin de préférences.
+const KEY: &str = "window_prefs";
+
+/// Ancien fichier de préférences de fenêtre (lu une dernière fois pour ne rien perdre).
 fn file() -> Option<PathBuf> {
     eframe::storage_dir("FalloutImageBrowser").map(|d| d.join("window.txt"))
 }
@@ -29,7 +33,20 @@ fn pair(v: &str) -> Option<[f32; 2]> {
 impl WinPrefs {
     pub fn load() -> WinPrefs {
         let mut w = WinPrefs::default();
-        let Some(text) = file().and_then(|f| std::fs::read_to_string(f).ok()) else { return w };
+        let mut store = crate::store::Store::open();
+        let text = match store.read(KEY) {
+            Some(t) => t,
+            None => {
+                // Ancien emplacement (fichier `window.txt`) : migré une fois vers le magasin, puis supprimé, pour qu'une
+                // réinitialisation ne le fasse pas revenir.
+                let Some(f) = file() else { return w };
+                let Ok(t) = std::fs::read_to_string(&f) else { return w };
+                if store.write(KEY, &t) {
+                    let _ = std::fs::remove_file(&f);
+                }
+                t
+            }
+        };
         for line in text.lines() {
             let Some((k, v)) = line.split_once('=') else { continue };
             match k.trim() {
@@ -44,17 +61,17 @@ impl WinPrefs {
     }
 
     pub fn save(&self) {
-        let Some(f) = file() else { return };
-        if let Some(d) = f.parent() {
-            let _ = std::fs::create_dir_all(d);
-        }
-        let mut s = format!("remember_size={}\nremember_pos={}\n", self.remember_size as u8, self.remember_pos as u8);
+        let mut s = format!("remember_size={}
+remember_pos={}
+", self.remember_size as u8, self.remember_pos as u8);
         if let Some(v) = self.size {
-            s += &format!("size={},{}\n", v[0], v[1]);
+            s += &format!("size={},{}
+", v[0], v[1]);
         }
         if let Some(v) = self.pos {
-            s += &format!("pos={},{}\n", v[0], v[1]);
+            s += &format!("pos={},{}
+", v[0], v[1]);
         }
-        let _ = std::fs::write(f, s);
+        crate::store::Store::open().write(KEY, &s);
     }
 }

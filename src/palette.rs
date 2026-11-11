@@ -119,6 +119,11 @@ impl Mapper {
     }
 }
 
+/// Les couleurs utilisées sont-elles toutes des multiples de 4 (palette 6 bits) ? Sinon la recherche du plus proche se fait sur une grille décalée.
+pub fn is_grid_aligned(p: &Palette) -> bool {
+    (0..256).filter(|&i| p.used[i] && p.colors[i][3] > 0).all(|i| p.colors[i][..3].iter().all(|c| c % 4 == 0))
+}
+
 /// Table de correspondance index source -> index cible pour une image déjà indexée.
 pub fn remap_table(src: &Palette, dst: &Palette, mapper: &Mapper) -> [u8; 256] {
     let mut t = [0u8; 256];

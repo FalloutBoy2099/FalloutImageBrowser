@@ -86,7 +86,8 @@ from the specification and checked against test archives.
   colour of the target. Before / after preview, then *Save as…* (a FRM stays a FRM, other formats are saved as an indexed PNG).
 * View → *Animate palette colours*: rotates the animated colour ranges of the Fallout palette (slime, monitors, fires, shoreline,
   indexes 229 to 253) on the images that use them. The bundled `default.pal` leaves these entries undefined, so approximate colours
-  are used for them; a `.PAL` that defines them (the game's own `color.pal`) is used as is.
+  are used for them; a `.PAL` that defines them (the game's own `color.pal`) is used as is. For an image read from a `.DAT` archive, the `color.pal` at the root of that archive is used automatically (when there is no same-name `.PAL`).
+* File → *Compare with another image…*: the displayed image and a second one side by side, or an image of the differences (red) with the number of differing pixels and the largest difference.
 * File → *Edit FRM header…*: frames per second, action frame and the X / Y offset of each direction, saved with *Save as…*;
   the images are not re-encoded.
 * The zoom level is kept from one image to the next. Animations (FRM, GIF): manual playback by default,
@@ -157,6 +158,14 @@ see [ShellExtension/README.md](ShellExtension/README.md).
 On Linux, Help → file association also installs a `.thumbnailer` entry so that file managers show thumbnails of these files
 (it calls the `thumbnail` command above). `.FR0` to `.FR5` (one direction per file) are read like `.FRM` and are part of the
 associations and of the Explorer thumbnails. macOS needs an application bundle (Quick Look): not provided.
+
+## Where the settings are stored
+
+* Windows: the registry, `HKEY_CURRENT_USER\SOFTWARE\FALLOUT\FalloutImageBrowser` (`fib_settings_v1`: all the settings; `window_prefs`: window size and position).
+* Linux: `~/.config/Fallout/FalloutImageBrowser/` (`$XDG_CONFIG_HOME` is honoured); macOS: `~/Library/Application Support/Fallout/FalloutImageBrowser/`.
+
+Settings saved by earlier versions (`FalloutImageBrowser/data/app.ron` and `window.txt` in the application data folder) are read once
+if nothing is stored yet. Deleting the key (or folder) restores the defaults. Help → *Reset preferences* does the same from the application.
 
 ## Robustness
 

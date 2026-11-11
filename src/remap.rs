@@ -11,7 +11,7 @@ pub fn remap_picture(pic: &Picture, target: &Palette) -> Result<Picture> {
     if pic.frames.iter().any(|f| !matches!(f.pixels, Pixels::Indexed(_))) {
         bail!("l'image n'est pas indexée");
     }
-    let mapper = Mapper::new(target, Some(0), true)?;
+    let mapper = Mapper::new(target, Some(0), palette::is_grid_aligned(target))?;
     let table = palette::remap_table(src, target, &mapper);
     let mut out = pic.clone();
     for f in out.frames.iter_mut() {
@@ -26,12 +26,22 @@ pub fn remap_picture(pic: &Picture, target: &Palette) -> Result<Picture> {
     Ok(out)
 }
 
-/// Octets du fichier à enregistrer pour l'image remappée, et son extension : FRM pour un FRM (palette cible externe), sinon
-/// PNG indexé qui conserve la palette cible.
-pub fn encode_remapped(result: &Picture) -> Result<(Vec<u8>, &'static str)> {
+/// Fichier à enregistrer pour une image remappée.
+pub struct Remapped {
+    pub bytes: Vec<u8>,
+    pub ext: &'static str,
+    /// Palette cible au format `.PAL` Fallout, à écrire à côté d'un FRM : un FRM n'embarque pas sa palette, et ses index n'ont
+    /// de sens qu'avec elle. `None` si elle n'est pas nécessaire (palette Fallout, ou format qui garde sa palette).
+    pub pal: Option<Vec<u8>>,
+}
+
+/// Octets du fichier à enregistrer pour l'image remappée : FRM pour un FRM (palette cible externe), sinon PNG indexé qui
+/// conserve la palette cible.
+pub fn encode_remapped(result: &Picture) -> Result<Remapped> {
     if result.format == Format::Frm {
         let target = result.palette.clone().map(std::sync::Arc::new);
-        return Ok((crate::assemble::picture_to_frm(result, target, false)?, "frm"));
+        let pal = target.as_ref().filter(|t| ***t != *palette::fallout()).map(|t| palette::write_pal(t));
+        return Ok(Remapped { bytes: crate::assemble::picture_to_frm(result, target, false)?, ext: "frm", pal });
     }
     let opt = crate::convert::ConvertOptions {
         format: Format::Png,
@@ -42,7 +52,7 @@ pub fn encode_remapped(result: &Picture) -> Result<(Vec<u8>, &'static str)> {
         ops: Default::default(),
         text_white: false,
     };
-    Ok((crate::convert::convert_to_bytes(result, &opt, &Default::default())?, "png"))
+    Ok(Remapped { bytes: crate::convert::convert_to_bytes(result, &opt, &Default::default())?, ext: "png", pal: None })
 }
 
 /// Combien de pixels changent d'index avec la nouvelle palette (pour informer avant d'enregistrer).

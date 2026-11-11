@@ -6,6 +6,9 @@ use crate::model::*;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// Taille maximale (sur le disque) d'un fichier dont on fait une miniature.
+const MAX_THUMB_FILE: u64 = 96 << 20;
+
 fn load_target_palette(spec: &str) -> Result<Arc<Palette>, String> {
     if spec.eq_ignore_ascii_case("fallout") {
         return Ok(crate::palette::fallout());
@@ -67,7 +70,11 @@ pub fn run_assemble(args: &[String]) -> i32 {
             }
         }
     }
-    let result = assemble::load_frames(&inputs).and_then(|frames| assemble::assemble_frm(frames, &opt)).map_err(|e| e.to_string()).and_then(|bytes| {
+    let result = assemble::load_sources(&inputs)
+        .and_then(|src| {
+            opt.dir_shift = src.dir_shift;
+            assemble::assemble_frm(src.frames, &opt)
+        }).map_err(|e| e.to_string()).and_then(|bytes| {
         let out = PathBuf::from(&out);
         let dir = out.parent().filter(|d| !d.as_os_str().is_empty()).map(|d| d.to_path_buf()).unwrap_or_default();
         let ext = out.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_else(|| "frm".into());
@@ -129,18 +136,30 @@ pub fn run_remap(args: &[String]) -> i32 {
     };
     let result = crate::loader::load_file(&input, &policy).and_then(|l| {
         let r = crate::remap::remap_picture(&l.pic, &target).map_err(|e| e.to_string())?;
-        let (bytes, ext) = crate::remap::encode_remapped(&r).map_err(|e| e.to_string())?;
-        let dir = match out {
-            Some(o) if !Path::new(&o).is_dir() && Path::new(&o).extension().is_some() => {
-                std::fs::write(&o, &bytes).map_err(|e| e.to_string())?;
-                return Ok(PathBuf::from(o));
+        let out_file = crate::remap::encode_remapped(&r).map_err(|e| e.to_string())?;
+        let (bytes, ext) = (&out_file.bytes, out_file.ext);
+        let with_pal = out_file.pal.is_some();
+        let t = match out {
+            Some(o) if !Path::new(&o).is_dir() && Path::new(&o).extension().is_some() => PathBuf::from(o),
+            other => {
+                let dir = match other {
+                    Some(o) => PathBuf::from(o),
+                    None => crate::dat::real_parent(&input).unwrap_or_default(),
+                };
+                let _ = std::fs::create_dir_all(&dir);
+                batch::unique_path_with(&dir, &batch::stem_of(&input), ext, &input, with_pal)
             }
-            Some(o) => PathBuf::from(o),
-            None => crate::dat::real_parent(&input).unwrap_or_default(),
         };
-        let _ = std::fs::create_dir_all(&dir);
-        let t = batch::unique_path(&dir, &batch::stem_of(&input), ext, &input);
         std::fs::write(&t, bytes).map_err(|e| e.to_string())?;
+        // Un FRM n'embarque pas sa palette : le .PAL cible est écrit à côté (jamais en remplaçant un fichier existant).
+        if let Some(pal) = &out_file.pal {
+            let pal_path = t.with_extension("pal");
+            if pal_path.exists() {
+                eprintln!("note: {} already exists, the target palette was not written", pal_path.display());
+            } else {
+                std::fs::write(&pal_path, pal).map_err(|e| e.to_string())?;
+            }
+        }
         Ok(t)
     });
     match result {
@@ -195,7 +214,11 @@ pub fn run_thumbnail(args: &[String]) -> i32 {
 
 /// Vignette PNG (plus grand côté au plus `size`, sans agrandir) de la première image d'un fichier.
 pub fn thumbnail_png(path: &Path, size: u32) -> Result<Vec<u8>, String> {
-    let loaded = crate::loader::load_file(path, &PalPolicy::Auto)?;
+    // Mêmes garde-fous que les miniatures de l'application : fichier trop gros ignoré, plantage d'un décodeur sans conséquence.
+    if !crate::dat::is_virtual(path) && std::fs::metadata(path).map(|m| m.len() > MAX_THUMB_FILE).unwrap_or(false) {
+        return Err("file too large for a thumbnail".into());
+    }
+    let loaded = std::panic::catch_unwind(|| crate::loader::load_file(path, &PalPolicy::Auto)).map_err(|_| "internal error while reading the file".to_string())??;
     let pic = &loaded.pic;
     let f = pic.frames.first().ok_or("no image")?;
     let (w, h) = (f.width, f.height);

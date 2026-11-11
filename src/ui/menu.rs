@@ -56,6 +56,9 @@ impl App {
                 if item(ui, tr("m.remap"), "", has_img) {
                     self.open_remap(&ctx);
                 }
+                if item(ui, tr("m.compare"), "", has_img) {
+                    self.open_compare(&ctx);
+                }
                 ui.separator();
                 if item(ui, tr("m.batch"), "Ctrl+B", true) {
                     self.open_batch();
@@ -261,6 +264,13 @@ impl App {
                 if item(ui, tr("m.assoc_arcanum"), "", can) {
                     self.associate_files(&crate::assoc::ARCANUM);
                 }
+                ui.separator();
+                ui.menu_button(tr("m.reset_prefs"), |ui| {
+                    if ui.button(tr("m.reset_confirm")).clicked() {
+                        self.reset_preferences(&ctx);
+                        ui.close();
+                    }
+                });
                 ui.separator();
                 if item(ui, tr("m.cli_help"), "", true) {
                     self.show_cli_help = true;

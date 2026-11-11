@@ -1,4 +1,5 @@
 //! Fenêtre « Assembler un FRM » : une liste d'images (ordre de lecture) devient un FRM animé de 1 à 6 directions.
+//! Le décodage, la quantification et l'écriture se font dans un thread : la fenêtre reste réactive.
 
 use crate::app::App;
 use crate::assemble::{self, AssembleOptions};
@@ -6,6 +7,7 @@ use crate::i18n::{tr, trf};
 use crate::loader::PalPolicy;
 use eframe::egui;
 use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 pub struct AsmDlg {
     pub files: Vec<PathBuf>,
@@ -13,11 +15,13 @@ pub struct AsmDlg {
     /// Utiliser la palette courante (si elle est personnalisée) plutôt que celle de Fallout.
     pub use_current: bool,
     pub error: Option<String>,
+    /// Travail en cours : fichier écrit, ou message d'erreur.
+    job: Option<Receiver<Result<PathBuf, String>>>,
 }
 
 impl AsmDlg {
     pub fn new() -> AsmDlg {
-        AsmDlg { files: Vec::new(), opt: AssembleOptions::default(), use_current: false, error: None }
+        AsmDlg { files: Vec::new(), opt: AssembleOptions::default(), use_current: false, error: None, job: None }
     }
 }
 
@@ -29,6 +33,16 @@ impl Default for AsmDlg {
 
 const IMAGE_EXTS: &[&str] = &["png", "gif", "bmp", "tga", "pcx", "jpg", "jpeg", "tif", "tiff", "webp", "qoi", "frm", "fr0", "fr1", "fr2", "fr3", "fr4", "fr5", "art", "rix"];
 
+/// Assemble les images et écrit le FRM (dans un thread).
+fn run_job(files: Vec<PathBuf>, opt: AssembleOptions, target: PathBuf) -> Result<PathBuf, String> {
+    let src = assemble::load_sources(&files).map_err(|e| e.to_string())?;
+    let mut opt = opt;
+    opt.dir_shift = src.dir_shift;
+    let bytes = assemble::assemble_frm(src.frames, &opt).map_err(|e| e.to_string())?;
+    std::fs::write(&target, bytes).map_err(|e| e.to_string())?;
+    Ok(target)
+}
+
 impl App {
     pub fn open_assemble(&mut self) {
         let mut dlg = AsmDlg::new();
@@ -36,19 +50,12 @@ impl App {
         self.asm_dlg = Some(dlg);
     }
 
-    fn save_assembled(&mut self, ctx: &egui::Context, dlg: &mut AsmDlg) -> bool {
-        let palette = match (&self.policy, dlg.use_current) {
+    /// Demande où écrire le FRM, puis lance l'assemblage en arrière-plan.
+    fn start_assemble(&mut self, ctx: &egui::Context, dlg: &mut AsmDlg) {
+        let mut opt = dlg.opt.clone();
+        opt.palette = match (&self.policy, dlg.use_current) {
             (PalPolicy::Custom(p, _), true) => Some(p.clone()),
             _ => None,
-        };
-        let mut opt = dlg.opt.clone();
-        opt.palette = palette;
-        let bytes = match assemble::load_frames(&dlg.files).and_then(|frames| assemble::assemble_frm(frames, &opt)) {
-            Ok(b) => b,
-            Err(e) => {
-                dlg.error = Some(e.to_string());
-                return false;
-            }
         };
         let first = &dlg.files[0];
         let mut d = rfd::FileDialog::new().add_filter("FRM", &["frm", "FRM"]).set_title(tr("asm.save"));
@@ -56,9 +63,24 @@ impl App {
             d = d.set_directory(dir);
         }
         d = d.set_file_name(format!("{}.frm", crate::batch::stem_of(first)));
-        let Some(target) = d.save_file() else { return false };
-        match std::fs::write(&target, bytes) {
-            Ok(()) => {
+        let Some(target) = d.save_file() else { return };
+        let (tx, rx) = channel();
+        let (files, ctx2) = (dlg.files.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_job(files, opt, target))).unwrap_or_else(|_| Err("internal error".into()));
+            let _ = tx.send(r);
+            ctx2.request_repaint();
+        });
+        dlg.error = None;
+        dlg.job = Some(rx);
+    }
+
+    /// Résultat du travail en arrière-plan : vrai quand le FRM a été écrit.
+    fn poll_assemble(&mut self, ctx: &egui::Context, dlg: &mut AsmDlg) -> bool {
+        let Some(rx) = &dlg.job else { return false };
+        match rx.try_recv() {
+            Ok(Ok(target)) => {
+                dlg.job = None;
                 self.toast(trf("asm.saved", &[("file", target.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())]));
                 self.cache.clear();
                 if self.tree.selected_dir.as_deref() == target.parent() {
@@ -66,8 +88,17 @@ impl App {
                 }
                 true
             }
-            Err(e) => {
-                dlg.error = Some(e.to_string());
+            Ok(Err(e)) => {
+                dlg.job = None;
+                dlg.error = Some(e);
+                false
+            }
+            Err(TryRecvError::Empty) => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                false
+            }
+            Err(TryRecvError::Disconnected) => {
+                dlg.job = None;
                 false
             }
         }
@@ -77,6 +108,10 @@ impl App {
         let Some(mut dlg) = self.asm_dlg.take() else { return };
         let (mut save, mut close) = (false, false);
         let mut action: Option<(usize, i32)> = None;
+        if self.poll_assemble(ctx, &mut dlg) {
+            close = true;
+        }
+        let busy = dlg.job.is_some();
         let current_name = match &self.policy {
             PalPolicy::Custom(_, n) => Some(n.clone()),
             _ => None,
@@ -90,65 +125,64 @@ impl App {
             if dlg.files.is_empty() {
                 ui.label(egui::RichText::new(tr("asm.empty")).weak());
             }
-            egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
-                for (i, f) in dlg.files.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(format!("{:>3}", i + 1)).weak().monospace());
-                        if ui.small_button("↑").clicked() {
-                            action = Some((i, -1));
-                        }
-                        if ui.small_button("↓").clicked() {
-                            action = Some((i, 1));
-                        }
-                        if ui.small_button("×").clicked() {
-                            action = Some((i, 0));
-                        }
-                        ui.label(f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()).on_hover_text(f.display().to_string());
-                    });
-                }
-            });
-            ui.horizontal(|ui| {
-                if crate::dialog::button(ui, tr("asm.add")).clicked()
-                    && let Some(files) = rfd::FileDialog::new().add_filter("images", IMAGE_EXTS).set_title(tr("asm.add")).pick_files()
-                {
-                    dlg.files.extend(files);
-                    dlg.error = None;
-                }
-                if crate::dialog::button_enabled(ui, !dlg.files.is_empty(), tr("asm.clear")).clicked() {
-                    dlg.files.clear();
-                }
-            });
-            ui.separator();
-            egui::Grid::new("asm_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                ui.label(tr("asm.directions"));
-                ui.add(egui::DragValue::new(&mut dlg.opt.directions).range(1..=6));
-                ui.end_row();
-                ui.label(tr("asm.fps"));
-                ui.add(egui::DragValue::new(&mut dlg.opt.fps).range(1..=255));
-                ui.end_row();
-                ui.label(tr("asm.action"));
-                let last = (n / dlg.opt.directions.max(1)).saturating_sub(1) as u32;
-                dlg.opt.action_frame = dlg.opt.action_frame.min(last);
-                ui.add(egui::DragValue::new(&mut dlg.opt.action_frame).range(0..=last));
-                ui.end_row();
-                ui.label(tr("asm.palette"));
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut dlg.use_current, false, tr("asm.pal_fallout"));
-                    if let Some(name) = &current_name {
-                        ui.radio_value(&mut dlg.use_current, true, trf("asm.pal_current", &[("name", name.clone())]));
+            ui.add_enabled_ui(!busy, |ui| {
+                egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
+                    for (i, f) in dlg.files.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(format!("{:>3}", i + 1)).weak().monospace());
+                            if ui.small_button("↑").clicked() {
+                                action = Some((i, -1));
+                            }
+                            if ui.small_button("↓").clicked() {
+                                action = Some((i, 1));
+                            }
+                            if ui.small_button("×").clicked() {
+                                action = Some((i, 0));
+                            }
+                            ui.label(f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()).on_hover_text(f.display().to_string());
+                        });
                     }
                 });
-                ui.end_row();
-                ui.label("");
-                ui.checkbox(&mut dlg.opt.dither, tr("asm.dither"));
-                ui.end_row();
+                ui.horizontal(|ui| {
+                    if crate::dialog::button(ui, tr("asm.add")).clicked()
+                        && let Some(files) = rfd::FileDialog::new().add_filter("images", IMAGE_EXTS).set_title(tr("asm.add")).pick_files()
+                    {
+                        dlg.files.extend(files);
+                        dlg.error = None;
+                    }
+                    if crate::dialog::button_enabled(ui, !dlg.files.is_empty(), tr("asm.clear")).clicked() {
+                        dlg.files.clear();
+                    }
+                });
+                ui.separator();
+                egui::Grid::new("asm_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                    ui.label(tr("asm.directions"));
+                    ui.add(egui::DragValue::new(&mut dlg.opt.directions).range(1..=6));
+                    ui.end_row();
+                    ui.label(tr("asm.fps"));
+                    ui.add(egui::DragValue::new(&mut dlg.opt.fps).range(1..=255));
+                    ui.end_row();
+                    ui.label(tr("asm.action"));
+                    let last = (n / dlg.opt.directions.max(1)).saturating_sub(1) as u32;
+                    dlg.opt.action_frame = dlg.opt.action_frame.min(last);
+                    ui.add(egui::DragValue::new(&mut dlg.opt.action_frame).range(0..=last));
+                    ui.end_row();
+                    ui.label(tr("asm.palette"));
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut dlg.use_current, false, tr("asm.pal_fallout"));
+                        if let Some(name) = &current_name {
+                            ui.radio_value(&mut dlg.use_current, true, trf("asm.pal_current", &[("name", name.clone())]));
+                        }
+                    });
+                    ui.end_row();
+                    ui.label("");
+                    ui.checkbox(&mut dlg.opt.dither, tr("asm.dither"));
+                    ui.end_row();
+                });
             });
             if n > 0 {
                 if divisible {
-                    ui.label(
-                        egui::RichText::new(trf("asm.summary", &[("n", n.to_string()), ("dirs", dlg.opt.directions.to_string()), ("fpd", (n / dlg.opt.directions).to_string())]))
-                            .weak(),
-                    );
+                    ui.label(egui::RichText::new(trf("asm.summary", &[("n", n.to_string()), ("dirs", dlg.opt.directions.to_string()), ("fpd", (n / dlg.opt.directions).to_string())])).weak());
                 } else {
                     ui.colored_label(ui.visuals().error_fg_color, trf("asm.not_divisible", &[("n", n.to_string()), ("dirs", dlg.opt.directions.to_string())]));
                 }
@@ -158,8 +192,11 @@ impl App {
             }
             ui.separator();
             ui.horizontal(|ui| {
-                save = crate::dialog::button_enabled(ui, divisible, tr("asm.save")).clicked();
-                close |= crate::dialog::button(ui, tr("c.close")).clicked();
+                save = crate::dialog::button_enabled(ui, divisible && !busy, tr("asm.save")).clicked();
+                close |= crate::dialog::button_enabled(ui, !busy, tr("c.close")).clicked();
+                if busy {
+                    ui.spinner();
+                }
             });
         });
         if let Some((i, step)) = action {
@@ -172,10 +209,10 @@ impl App {
                 _ => {}
             }
         }
-        if save && self.save_assembled(ctx, &mut dlg) {
-            close = true;
+        if save {
+            self.start_assemble(ctx, &mut dlg);
         }
-        if !(close || modal.should_close()) {
+        if !(close || (modal.should_close() && !busy)) {
             self.asm_dlg = Some(dlg);
         }
     }

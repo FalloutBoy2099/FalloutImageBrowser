@@ -9,12 +9,12 @@ license = "MIT"
 embed-resource = "3"
 
 [dependencies]
-eframe = { version = "0.36.2", default-features = false, features = ["wgpu_no_default_features", "default_fonts", "persistence", "wayland", "x11"] }
+eframe = { version = "0.37.0", default-features = false, features = ["wgpu_no_default_features", "default_fonts", "persistence", "wayland", "x11"] }
 serde = { version = "1", features = ["derive"] }
 anyhow = "1"
 flate2 = "1"
 rayon = "1"
-rfd = "0.17"
+rfd = "0.18"
 sys-locale = "0.3"
 color_quant = "2"
 sha2 = "0.11"
@@ -26,7 +26,7 @@ texture2ddecoder = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 png = "0.18"
 image = { version = "0.25", default-features = false, features = ["jpeg", "webp", "png"] }
-sevenz-rust2 = { version = "0.24", default-features = false }
+sevenz-rust2 = { version = "0.25", default-features = false }
 zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
 ruzstd = "0.9.1"
 

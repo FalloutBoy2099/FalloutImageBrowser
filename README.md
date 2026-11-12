@@ -149,15 +149,12 @@ fallout_image_browser convert "weapons\Mace Glove.spr" -f png --sequence # every
 fallout_image_browser palette default.pal -f gpl                         # Fallout palette to GIMP
 ```
 
-## Explorer thumbnails (Windows)
-
-`ShellExtension\` is a separate project that makes Windows Explorer show thumbnails for Fallout (`.FRM`, `.RIX`), Arcanum (`.ART`) and Fallout Tactics (`.ZAR`, `.TIL`, `.SPR`) files. Run
-`.\ShellExtension\install.ps1` to install it for the current user (no administrator rights) and `uninstall.ps1` to remove it;
-see [ShellExtension/README.md](ShellExtension/README.md).
+## File manager thumbnails
 
 On Linux, Help → file association also installs a `.thumbnailer` entry so that file managers show thumbnails of these files
 (it calls the `thumbnail` command above). `.FR0` to `.FR5` (one direction per file) are read like `.FRM` and are part of the
-associations and of the Explorer thumbnails. macOS needs an application bundle (Quick Look): not provided.
+associations. The application itself provides no Windows Explorer thumbnails (use a separate thumbnail provider) and, on macOS,
+Quick Look needs an application bundle: not provided.
 
 ## Where the settings are stored
 

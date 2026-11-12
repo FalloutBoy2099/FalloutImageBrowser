@@ -35,9 +35,13 @@ impl Store {
         self.cache.get(name).cloned().or_else(|| imp::read(&self.place, name))
     }
 
-    /// Écrit une valeur texte ; renvoie faux si le support de stockage n'est pas accessible.
+    /// Écrit une valeur texte ; renvoie faux si le support de stockage n'est pas accessible. Rien n'est écrit si la valeur
+    /// enregistrée est déjà identique (la sauvegarde périodique ne touche donc ni le registre ni le disque sans changement).
     pub fn write(&mut self, name: &str, value: &str) -> bool {
         self.cache.insert(name.to_string(), value.to_string());
+        if imp::read(&self.place, name).as_deref() == Some(value) {
+            return true;
+        }
         imp::write(&self.place, name, value)
     }
 
@@ -195,6 +199,10 @@ mod tests {
         // Une nouvelle instance relit depuis le support, pas depuis le cache.
         assert_eq!(Store::at(&place).read("fib_settings_v1").as_deref(), Some(text));
         assert_eq!(Store::at(&place).read("absent"), None);
+        // Réécrire la même valeur réussit sans rien changer ; une valeur différente est bien enregistrée.
+        assert!(s.write("fib_settings_v1", text));
+        assert!(s.write("fib_settings_v1", "autre"));
+        assert_eq!(Store::at(&place).read("fib_settings_v1").as_deref(), Some("autre"));
         s.clear();
         assert_eq!(Store::at(&place).read("fib_settings_v1"), None);
     }

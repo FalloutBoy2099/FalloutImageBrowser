@@ -29,4 +29,3 @@ desktop.ini
 /.claude/worktrees/
 
 # Extension de l'Explorateur : projet à part avec sa propre cible de compilation
-/ShellExtension/target/

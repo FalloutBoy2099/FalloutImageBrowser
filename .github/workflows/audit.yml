@@ -1,6 +1,6 @@
 name: Audit
 
-# Checks the dependencies of both projects (the application and ShellExtension/) against the RustSec advisory database.
+# Checks the dependencies against the RustSec advisory database.
 # It runs when a manifest or lock file changes, and every Monday so a newly published advisory is noticed even if
 # nobody touches the repository.
 
@@ -34,9 +34,5 @@ jobs:
         with:
           tool: cargo-audit
 
-      - name: Application
-        run: cargo audit
+      - run: cargo audit
 
-      - name: Explorer extension
-        working-directory: ShellExtension
-        run: cargo audit

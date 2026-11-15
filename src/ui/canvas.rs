@@ -527,6 +527,9 @@ impl App {
                 let anim_w = (room - 410.0).clamp(80.0, 190.0);
                 // `part` : 1 = lecture et images, 2 = animation et direction ; chaque ligne appelle la même fonction.
                 let mut controls = |ui: &mut egui::Ui, part: u8| {
+                    // Hauteur de ligne fixée à celle des boutons dès le début : sinon les premiers éléments (texte, séparateur) sont
+                    // centrés sur une ligne plus basse que celle que les boutons agrandissent ensuite, et ne sont pas alignés avec eux.
+                    ui.set_min_height(28.0);
                     if part & 1 != 0 && n > 1 {
                         if icon_button(ui, if playing { Icon::Pause } else { Icon::Play }, &tr(if playing { "a.pause" } else { "a.play" }), false, true).clicked() {
                             playing = !playing;
@@ -594,7 +597,10 @@ impl App {
                         n = pic.dir_len(dir);
                         frame = frame.min(n.saturating_sub(1));
                     } else if dirs > 1 {
-                        ui.separator();
+                        // Séparateur seulement s'il y a quelque chose avant (lecture et images).
+                        if part & 1 != 0 && n > 1 {
+                            ui.separator();
+                        }
                         ui.label(tr("a.direction"));
                         if icon_button(ui, Icon::Prev, &tr("a.direction"), false, true).clicked() {
                             dir = (dir + dirs - 1) % dirs;

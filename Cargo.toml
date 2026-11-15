@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Visionneuse / convertisseur d'images ultra rapide pour Fallout (FRM, PAL, RIX, ART, ...)"
 license = "MIT"
+build = "src/build.rs"
 
 [build-dependencies]
 embed-resource = "3"
